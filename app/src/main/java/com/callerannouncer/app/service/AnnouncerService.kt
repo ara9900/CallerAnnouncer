@@ -70,6 +70,9 @@ class AnnouncerService : Service() {
             ACTION_TEST_VOICE -> {
                 scope.launch { announceTest() }
             }
+            ACTION_STOP_CALL_ANNOUNCEMENT -> {
+                stopActiveCallAnnouncement()
+            }
             ACTION_STOP -> {
                 stopSelf()
             }
@@ -157,6 +160,7 @@ class AnnouncerService : Service() {
                 return@withLock false
             }
             if (forIncomingCall) {
+                isAnnouncingIncomingCall = true
                 audioRoutingManager.beginIncomingCallAnnouncement()
             } else {
                 val focusOk = audioRoutingManager.requestFocusAndRoute()
@@ -180,12 +184,20 @@ class AnnouncerService : Service() {
                 spoken
             } finally {
                 if (forIncomingCall) {
+                    isAnnouncingIncomingCall = false
                     audioRoutingManager.endIncomingCallAnnouncement()
                 } else {
                     audioRoutingManager.release()
                 }
             }
         }
+    }
+
+    private fun stopActiveCallAnnouncement() {
+        if (!isAnnouncingIncomingCall) return
+        Log.i(TAG, "Stopping active call announcement")
+        ttsManager.stop()
+        audioRoutingManager.endIncomingCallAnnouncement()
     }
 
     private fun startInForeground() {
@@ -252,6 +264,8 @@ class AnnouncerService : Service() {
         const val ACTION_ANNOUNCE_CALL = "com.callerannouncer.app.ACTION_ANNOUNCE_CALL"
         const val ACTION_ANNOUNCE_SMS = "com.callerannouncer.app.ACTION_ANNOUNCE_SMS"
         const val ACTION_TEST_VOICE = "com.callerannouncer.app.ACTION_TEST_VOICE"
+        const val ACTION_STOP_CALL_ANNOUNCEMENT =
+            "com.callerannouncer.app.ACTION_STOP_CALL_ANNOUNCEMENT"
         const val ACTION_STOP = "com.callerannouncer.app.ACTION_STOP"
 
         const val EXTRA_DISPLAY_NAME = "extra_display_name"
@@ -261,6 +275,9 @@ class AnnouncerService : Service() {
         @Volatile
         var isRunning: Boolean = false
             private set
+
+        @Volatile
+        private var isAnnouncingIncomingCall: Boolean = false
 
         private fun startServiceCompat(context: Context, intent: Intent) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -305,6 +322,13 @@ class AnnouncerService : Service() {
                 action = ACTION_TEST_VOICE
             }
             startServiceCompat(context, intent)
+        }
+
+        fun stopCallAnnouncement(context: Context) {
+            val intent = Intent(context, AnnouncerService::class.java).apply {
+                action = ACTION_STOP_CALL_ANNOUNCEMENT
+            }
+            context.startService(intent)
         }
     }
 }

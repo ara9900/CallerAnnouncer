@@ -77,6 +77,10 @@ class OfflinePersianTtsEngine(private val context: Context) {
         return withContext(Dispatchers.IO) {
             try {
                 repeat(times) { index ->
+                    if (player.isStopped()) {
+                        Log.i(TAG, "speak cancelled before repeat $index")
+                        return@withContext false
+                    }
                     if (index > 0) {
                         Thread.sleep(250)
                     }
@@ -97,6 +101,12 @@ class OfflinePersianTtsEngine(private val context: Context) {
                         callback = callback,
                     )
 
+                    if (player.isStopped()) {
+                        Log.i(TAG, "speak cancelled during synthesis")
+                        player.endSession()
+                        return@withContext false
+                    }
+
                     if (audio.samples.isEmpty()) {
                         Log.e(TAG, "Generated empty audio for text=$text")
                         player.endSession()
@@ -111,6 +121,11 @@ class OfflinePersianTtsEngine(private val context: Context) {
 
                     player.awaitPlayback(audio.samples.size)
                     player.endSession()
+
+                    if (player.isStopped()) {
+                        Log.i(TAG, "speak cancelled during playback")
+                        return@withContext false
+                    }
                 }
                 true
             } catch (e: Exception) {

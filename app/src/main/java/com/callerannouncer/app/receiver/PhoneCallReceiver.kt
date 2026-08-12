@@ -18,8 +18,20 @@ class PhoneCallReceiver : BroadcastReceiver() {
         if (intent.action != TelephonyManager.ACTION_PHONE_STATE_CHANGED) return
 
         val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
-        if (state != TelephonyManager.EXTRA_STATE_RINGING) return
+        when (state) {
+            TelephonyManager.EXTRA_STATE_RINGING -> handleRinging(context, intent)
+            TelephonyManager.EXTRA_STATE_OFFHOOK,
+            TelephonyManager.EXTRA_STATE_IDLE -> {
+                Log.i(TAG, "Call state=$state — stopping announcement")
+                AnnouncerService.stopCallAnnouncement(context.applicationContext)
+                if (state == TelephonyManager.EXTRA_STATE_IDLE) {
+                    resetDebounce()
+                }
+            }
+        }
+    }
 
+    private fun handleRinging(context: Context, intent: Intent) {
         val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER).orEmpty()
         if (!shouldAnnounce(number)) {
             Log.i(TAG, "Skipping duplicate ring event for number=$number")
@@ -34,6 +46,11 @@ class PhoneCallReceiver : BroadcastReceiver() {
             displayName = displayName,
             phoneNumber = number,
         )
+    }
+
+    private fun resetDebounce() {
+        lastNumber = ""
+        lastAnnounceAt.set(0)
     }
 
     private fun shouldAnnounce(number: String): Boolean {
