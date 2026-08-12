@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothProfile
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
@@ -30,6 +31,7 @@ class AudioRoutingManager(context: Context) {
     private var savedRingVolume: Int? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var incomingCallSessionActive = false
+    private var savedSpeakerphoneOn: Boolean? = null
 
     fun shouldAnnounce(playMode: PlayMode): Boolean {
         return when (playMode) {
@@ -48,6 +50,56 @@ class AudioRoutingManager(context: Context) {
         val a2dp = audioManager.isBluetoothA2dpOn
         val sco = audioManager.isBluetoothScoOn || isBluetoothHeadsetConnected()
         return wired || a2dp || sco
+    }
+
+    /** Returns the connected wired/BT output device, if any. */
+    fun findHeadsetOutputDevice(): AudioDeviceInfo? {
+        val headsetTypes = setOf(
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_USB_DEVICE,
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_HEARING_AID,
+        )
+        return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .filter { it.type in headsetTypes }
+            .minByOrNull { headsetDevicePriority(it.type) }
+    }
+
+    /**
+     * Pins playback to the connected headset/Bluetooth device and disables speakerphone
+     * so TTS is not duplicated on the phone speaker.
+     */
+    fun beginExclusiveHeadsetOutput(): AudioDeviceInfo? {
+        val device = findHeadsetOutputDevice() ?: return null
+        try {
+            if (savedSpeakerphoneOn == null) {
+                savedSpeakerphoneOn = audioManager.isSpeakerphoneOn
+            }
+            if (audioManager.isSpeakerphoneOn) {
+                audioManager.isSpeakerphoneOn = false
+                Log.i(TAG, "Disabled speakerphone for headset-only playback")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not disable speakerphone", e)
+        }
+        Log.i(TAG, "Routing audio exclusively to ${device.productName} (type=${device.type})")
+        return device
+    }
+
+    fun endExclusiveHeadsetOutput() {
+        try {
+            savedSpeakerphoneOn?.let { previous ->
+                audioManager.isSpeakerphoneOn = previous
+                Log.i(TAG, "Restored speakerphone=$previous")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not restore speakerphone", e)
+        } finally {
+            savedSpeakerphoneOn = null
+        }
     }
 
     /** Duck ringtone and take focus so caller name is audible over the ring. */
@@ -74,10 +126,13 @@ class AudioRoutingManager(context: Context) {
             Log.w(TAG, "Could not duck ring volume", e)
         }
 
-        // Ensure TTS (we route via USAGE_ALARM) is audible over the ringtone.
-        boostAnnouncementStreamVolume()
-        // Also make sure the media stream isn't at 0 (some OEMs mirror ring behavior).
-        boostMediaVolumeIfSilent()
+        // USAGE_ALARM often bleeds to the phone speaker even with headphones connected.
+        if (isHeadsetOrBluetoothConnected()) {
+            boostMediaVolumeIfSilent()
+        } else {
+            boostAnnouncementStreamVolume()
+            boostMediaVolumeIfSilent()
+        }
 
         try {
             if (audioManager.isBluetoothScoOn) {
@@ -87,7 +142,11 @@ class AudioRoutingManager(context: Context) {
         } catch (_: Exception) {
         }
 
-        requestExclusiveAudioFocus()
+        if (isHeadsetOrBluetoothConnected()) {
+            requestTransientAudioFocus()
+        } else {
+            requestExclusiveAudioFocus()
+        }
     }
 
     fun endIncomingCallAnnouncement() {
@@ -270,6 +329,17 @@ class AudioRoutingManager(context: Context) {
         isWiredHeadsetOn
     } catch (_: Exception) {
         false
+    }
+
+    private fun headsetDevicePriority(type: Int): Int = when (type) {
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> 0
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> 1
+        AudioDeviceInfo.TYPE_USB_HEADSET -> 2
+        AudioDeviceInfo.TYPE_USB_DEVICE -> 3
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> 4
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> 5
+        AudioDeviceInfo.TYPE_HEARING_AID -> 6
+        else -> 99
     }
 
     companion object {

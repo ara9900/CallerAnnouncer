@@ -1,6 +1,7 @@
 package com.callerannouncer.app.service.tts
 
 import android.content.Context
+import android.media.AudioDeviceInfo
 import android.util.Log
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.getOfflineTtsConfig
@@ -65,6 +66,7 @@ class OfflinePersianTtsEngine(private val context: Context) {
         speed: Float,
         repeatCount: Int,
         route: PlaybackRoute = PlaybackRoute.MEDIA,
+        outputDevice: AudioDeviceInfo? = null,
     ): Boolean {
         if (text.isBlank()) return false
         if (!ensureReady()) return false
@@ -86,7 +88,7 @@ class OfflinePersianTtsEngine(private val context: Context) {
                             return@withContext false
                         }
                     }
-                    player.beginSession(route)
+                    player.beginSession(route, outputDevice)
 
                     val callback: (FloatArray) -> Int = { chunk ->
                         when {

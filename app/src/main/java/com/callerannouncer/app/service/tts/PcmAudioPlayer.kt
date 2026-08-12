@@ -1,9 +1,11 @@
 package com.callerannouncer.app.service.tts
 
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.os.Build
 import android.util.Log
 
 /**
@@ -14,6 +16,7 @@ class PcmAudioPlayer(private val sampleRate: Int) {
 
     private var track: AudioTrack? = null
     private var activeRoute: PlaybackRoute? = null
+    private var activeOutputDevice: AudioDeviceInfo? = null
     @Volatile
     private var stopped = false
 
@@ -22,12 +25,23 @@ class PcmAudioPlayer(private val sampleRate: Int) {
         stopped = false
     }
 
-    fun beginSession(route: PlaybackRoute) {
+    fun beginSession(route: PlaybackRoute, outputDevice: AudioDeviceInfo? = null) {
         stopped = false
-        if (track == null || activeRoute != route || track?.state != AudioTrack.STATE_INITIALIZED) {
+        val routeChanged = activeRoute != route
+        val deviceChanged = activeOutputDevice?.id != outputDevice?.id
+        if (
+            track == null ||
+            routeChanged ||
+            deviceChanged ||
+            track?.state != AudioTrack.STATE_INITIALIZED
+        ) {
             track?.release()
-            track = createTrack(sampleRate, route)
+            track = createTrack(sampleRate, route, outputDevice)
             activeRoute = route
+            activeOutputDevice = outputDevice
+        } else if (outputDevice != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val routed = track?.setPreferredDevice(outputDevice) == true
+            Log.i(TAG, "setPreferredDevice ${outputDevice.productName} result=$routed")
         }
         val audioTrack = track
         if (audioTrack == null || audioTrack.state != AudioTrack.STATE_INITIALIZED) {
@@ -91,9 +105,14 @@ class PcmAudioPlayer(private val sampleRate: Int) {
         track?.release()
         track = null
         activeRoute = null
+        activeOutputDevice = null
     }
 
-    private fun createTrack(sampleRate: Int, route: PlaybackRoute): AudioTrack {
+    private fun createTrack(
+        sampleRate: Int,
+        route: PlaybackRoute,
+        outputDevice: AudioDeviceInfo?,
+    ): AudioTrack {
         val bufferBytes = AudioTrack.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
@@ -120,13 +139,18 @@ class PcmAudioPlayer(private val sampleRate: Int) {
             .setSampleRate(sampleRate)
             .build()
 
-        return AudioTrack(
+        val audioTrack = AudioTrack(
             attrs,
             format,
             bufferBytes,
             AudioTrack.MODE_STREAM,
             AudioManager.AUDIO_SESSION_ID_GENERATE,
         )
+        if (outputDevice != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val routed = audioTrack.setPreferredDevice(outputDevice)
+            Log.i(TAG, "Pinned output to ${outputDevice.productName} (type=${outputDevice.type}) routed=$routed")
+        }
+        return audioTrack
     }
 
     companion object {

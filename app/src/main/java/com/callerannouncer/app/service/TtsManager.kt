@@ -1,6 +1,7 @@
 package com.callerannouncer.app.service
 
 import android.content.Context
+import android.media.AudioDeviceInfo
 import com.callerannouncer.app.service.tts.OfflinePersianTtsEngine
 import com.callerannouncer.app.service.tts.PlaybackRoute
 import com.callerannouncer.app.service.tts.TtsModelManager
@@ -25,11 +26,13 @@ class TtsManager(context: Context) {
         text: String,
         repeatCount: Int = 1,
         route: PlaybackRoute = PlaybackRoute.MEDIA,
+        outputDevice: AudioDeviceInfo? = null,
     ): Boolean = engine.speak(
         text = text,
         speed = speechRate,
         repeatCount = repeatCount,
         route = route,
+        outputDevice = outputDevice,
     )
 
     fun stop() = engine.stop()

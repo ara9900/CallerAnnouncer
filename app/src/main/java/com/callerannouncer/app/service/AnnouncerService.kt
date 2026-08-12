@@ -173,21 +173,27 @@ class AnnouncerService : Service() {
                     Log.w(TAG, "Audio focus denied — continuing anyway")
                 }
             }
+            val headsetDevice = audioRoutingManager.beginExclusiveHeadsetOutput()
             try {
                 ttsManager.setSpeechParams(rate, pitch)
-                val route = if (forIncomingCall) {
-                    PlaybackRoute.INCOMING_CALL
-                } else {
-                    PlaybackRoute.MEDIA
+                val route = when {
+                    headsetDevice != null -> PlaybackRoute.MEDIA
+                    forIncomingCall -> PlaybackRoute.INCOMING_CALL
+                    else -> PlaybackRoute.MEDIA
                 }
                 val spoken = ttsManager.speakAndAwait(
                     text = text,
                     repeatCount = repeatCount,
                     route = route,
+                    outputDevice = headsetDevice,
                 )
-                Log.i(TAG, "speak result=$spoken incoming=$forIncomingCall text=$text")
+                Log.i(
+                    TAG,
+                    "speak result=$spoken incoming=$forIncomingCall headset=${headsetDevice != null} text=$text",
+                )
                 spoken
             } finally {
+                audioRoutingManager.endExclusiveHeadsetOutput()
                 if (forIncomingCall) {
                     isAnnouncingIncomingCall = false
                     audioRoutingManager.endIncomingCallAnnouncement()
