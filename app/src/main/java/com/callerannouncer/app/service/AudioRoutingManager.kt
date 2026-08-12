@@ -66,13 +66,15 @@ class AudioRoutingManager(context: Context) {
 
             savedRingVolume = audioManager.getStreamVolume(AudioManager.STREAM_RING)
             val maxRing = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
-            val ducked = (maxRing * 0.08f).toInt().coerceAtLeast(0)
+            // Duck ring, but keep it audible.
+            val ducked = (maxRing * 0.25f).toInt().coerceAtLeast(1)
             audioManager.setStreamVolume(AudioManager.STREAM_RING, ducked, 0)
             Log.i(TAG, "Ducked STREAM_RING from $savedRingVolume to $ducked")
         } catch (e: Exception) {
             Log.w(TAG, "Could not duck ring volume", e)
         }
 
+        // Ensure TTS (we route via USAGE_ALARM) is audible over the ringtone.
         boostAnnouncementStreamVolume()
         // Also make sure the media stream isn't at 0 (some OEMs mirror ring behavior).
         boostMediaVolumeIfSilent()
@@ -132,11 +134,14 @@ class AudioRoutingManager(context: Context) {
     private fun boostAnnouncementStreamVolume() {
         try {
             val stream = AudioManager.STREAM_ALARM
-            if (audioManager.getStreamVolume(stream) == 0) {
-                val max = audioManager.getStreamMaxVolume(stream)
-                val target = (max * 0.7f).toInt().coerceAtLeast(1)
+            val max = audioManager.getStreamMaxVolume(stream)
+            // Some OEMs link ring/call routing with the alarm stream.
+            // We set a strong minimum so the caller name is actually audible.
+            val target = (max * 0.65f).toInt().coerceAtLeast(1)
+            val current = audioManager.getStreamVolume(stream)
+            if (current < target) {
                 audioManager.setStreamVolume(stream, target, 0)
-                Log.i(TAG, "Raised STREAM_ALARM to $target for call announcement")
+                Log.i(TAG, "Boosted STREAM_ALARM from $current to $target for call announcement")
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not boost alarm stream", e)
