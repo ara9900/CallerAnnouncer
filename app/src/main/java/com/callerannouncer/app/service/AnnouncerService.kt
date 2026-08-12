@@ -123,7 +123,7 @@ class AnnouncerService : Service() {
                     ok -> "آزمایش صدا پخش شد"
                     !TtsModelManager.isModelReady(applicationContext) ->
                         "مدل صدای فارسی هنوز آماده نیست — اینترنت را چک کنید و صبر کنید"
-                    else -> "پخش صدا ناموفق بود — ولوم رسانه را بالا ببرید"
+                    else -> "پخش صدا ناموفق بود — اپ را ببندید و دوباره باز کنید"
                 },
                 Toast.LENGTH_LONG,
             ).show()

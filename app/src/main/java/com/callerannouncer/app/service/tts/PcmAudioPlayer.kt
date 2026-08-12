@@ -10,8 +10,9 @@ import android.util.Log
  * Streams PCM float samples through [AudioTrack] and waits until playback finishes
  * before returning (stopping early causes only a brief click/noise).
  */
-class PcmAudioPlayer(private val sampleRate: Int) {
+class PcmAudioPlayer(sampleRate: Int) {
 
+    private val sampleRate: Int = sampleRate
     private var track: AudioTrack? = createTrack(sampleRate)
     @Volatile
     private var stopped = false
@@ -87,11 +88,16 @@ class PcmAudioPlayer(private val sampleRate: Int) {
     }
 
     private fun createTrack(sampleRate: Int): AudioTrack {
-        val minBuf = AudioTrack.getMinBufferSize(
+        // Must use getMinBufferSize as-is (bytes). Do NOT coerce to sampleRate — that value
+        // is in samples and is often not a multiple of 4, which breaks PCM_FLOAT on Android.
+        val bufferBytes = AudioTrack.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_FLOAT,
-        ).coerceAtLeast(sampleRate)
+        )
+        require(bufferBytes > 0) {
+            "AudioTrack.getMinBufferSize failed ($bufferBytes) for rate=$sampleRate"
+        }
 
         val attrs = AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -107,7 +113,7 @@ class PcmAudioPlayer(private val sampleRate: Int) {
         return AudioTrack(
             attrs,
             format,
-            minBuf,
+            bufferBytes,
             AudioTrack.MODE_STREAM,
             AudioManager.AUDIO_SESSION_ID_GENERATE,
         )

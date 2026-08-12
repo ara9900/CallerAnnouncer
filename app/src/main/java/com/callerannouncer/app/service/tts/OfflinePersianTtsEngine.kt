@@ -76,11 +76,10 @@ class OfflinePersianTtsEngine(private val context: Context) {
                     player.beginSession()
 
                     val callback: (FloatArray) -> Int = { chunk ->
-                        if (player.isStopped()) {
-                            0
-                        } else {
-                            player.writeSamples(chunk)
-                            1
+                        when {
+                            player.isStopped() -> 0
+                            player.writeSamples(chunk) -> 1
+                            else -> 0
                         }
                     }
 
