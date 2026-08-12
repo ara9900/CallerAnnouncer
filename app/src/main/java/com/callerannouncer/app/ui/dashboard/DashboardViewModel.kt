@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.callerannouncer.app.data.preferences.SettingsRepository
 import com.callerannouncer.app.domain.model.UserSettings
 import com.callerannouncer.app.service.AnnouncerService
+import com.callerannouncer.app.service.tts.TtsModelManager
+import com.callerannouncer.app.service.tts.TtsModelState
 import com.callerannouncer.app.util.PermissionHelper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -33,6 +35,13 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     val serviceRunning: StateFlow<Boolean> = _serviceRunning.asStateFlow()
     val missingPermissions: StateFlow<List<String>> = _missingPermissions.asStateFlow()
+    val ttsModelState: StateFlow<TtsModelState> = TtsModelManager.state
+
+    init {
+        viewModelScope.launch {
+            TtsModelManager.ensureModelReady(getApplication())
+        }
+    }
 
     fun refresh() {
         val app = getApplication<Application>()

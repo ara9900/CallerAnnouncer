@@ -18,6 +18,7 @@ import com.callerannouncer.app.MainActivity
 import com.callerannouncer.app.R
 import com.callerannouncer.app.data.preferences.SettingsRepository
 import com.callerannouncer.app.domain.model.PlayMode
+import com.callerannouncer.app.service.tts.TtsModelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -108,7 +109,7 @@ class AnnouncerService : Service() {
     private suspend fun announceTest() {
         val settings = settingsRepository.settingsFlow.first()
         val ok = speak(
-            text = "این یک آزمایش صدای اعلام‌گر است",
+            text = "این یک آزمایش صدای اعلام‌گر با موتور فارسی آفلاین است",
             repeatCount = 1,
             rate = settings.speechRate,
             pitch = settings.pitch,
@@ -118,7 +119,12 @@ class AnnouncerService : Service() {
         withContext(Dispatchers.Main) {
             Toast.makeText(
                 applicationContext,
-                if (ok) "در حال پخش آزمایش صدا" else "موتور صدا آماده نیست. موتور TTS فارسی را در تنظیمات گوشی نصب کنید",
+                when {
+                    ok -> "در حال پخش آزمایش صدا"
+                    !TtsModelManager.isModelReady(applicationContext) ->
+                        "در حال دانلود مدل صدای فارسی… دوباره امتحان کنید"
+                    else -> "پخش صدا ناموفق بود"
+                },
                 Toast.LENGTH_LONG,
             ).show()
         }
@@ -135,6 +141,10 @@ class AnnouncerService : Service() {
         return speakMutex.withLock {
             if (!forcePlay && !audioRoutingManager.shouldAnnounce(playMode)) {
                 Log.i(TAG, "Skipped by playMode=$playMode")
+                return@withLock false
+            }
+            if (!TtsModelManager.ensureModelReady(applicationContext)) {
+                Log.e(TAG, "TTS model not ready")
                 return@withLock false
             }
             val focusOk = audioRoutingManager.requestFocusAndRoute()

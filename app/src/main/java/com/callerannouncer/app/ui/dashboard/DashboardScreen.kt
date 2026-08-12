@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.callerannouncer.app.service.tts.TtsModelState
 import com.callerannouncer.app.ui.components.AppBackground
 import com.callerannouncer.app.ui.components.BrandMark
 import com.callerannouncer.app.ui.components.CallSmsToggles
@@ -44,6 +45,7 @@ fun DashboardScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val serviceRunning by viewModel.serviceRunning.collectAsStateWithLifecycle()
     val missing by viewModel.missingPermissions.collectAsStateWithLifecycle()
+    val ttsState by viewModel.ttsModelState.collectAsStateWithLifecycle()
 
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
