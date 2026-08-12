@@ -24,14 +24,40 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Prepare signing keystore (TikNet production key)
+        id: android_keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+        run: |
+          KEYSTORE_PATH="${{ github.workspace }}/android_keystore.jks"
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::Secret ANDROID_KEYSTORE_BASE64 is required (same as TikNet / v2rayng repo)."
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_PATH"
+          STORE_PASS="${ANDROID_KEYSTORE_PASSWORD:-tiknet123}"
+          KEY_ALIAS="${ANDROID_KEYSTORE_ALIAS:-tiknet}"
+          echo "filePath=$KEYSTORE_PATH" >> "$GITHUB_OUTPUT"
+          echo "store_password=$STORE_PASS" >> "$GITHUB_OUTPUT"
+          echo "key_alias=$KEY_ALIAS" >> "$GITHUB_OUTPUT"
+          echo "key_password=$STORE_PASS" >> "$GITHUB_OUTPUT"
+          echo "Using production keystore alias=$KEY_ALIAS"
+
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+      - name: Build signed Release APK
+        run: |
+          ./gradlew assembleRelease --stacktrace \
+            -Pandroid.injected.signing.store.file=${{ steps.android_keystore.outputs.filePath }} \
+            -Pandroid.injected.signing.store.password=${{ steps.android_keystore.outputs.store_password }} \
+            -Pandroid.injected.signing.key.alias=${{ steps.android_keystore.outputs.key_alias }} \
+            -Pandroid.injected.signing.key.password=${{ steps.android_keystore.outputs.key_password }}
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: CallerAnnouncer-Debug-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/release/app-release.apk
