@@ -48,6 +48,12 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      - name: Download sherpa-onnx AAR
+        run: |
+          mkdir -p app/libs
+          curl -L "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.5/sherpa-onnx-1.13.5.aar" \
+            -o app/libs/sherpa-onnx.aar
+
       - name: Build signed Release APK
         run: |
           ./gradlew assembleRelease --stacktrace \

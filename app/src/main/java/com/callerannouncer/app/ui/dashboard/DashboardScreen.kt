@@ -97,6 +97,8 @@ fun DashboardScreen(
                     .alpha(heroAlpha),
             )
 
+            TtsModelStatusCard(state = ttsState)
+
             Column(
                 modifier = Modifier.alpha(bodyAlpha),
                 verticalArrangement = Arrangement.spacedBy(18.dp),
@@ -125,4 +127,16 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(12.dp))
         }
     }
+}
+
+@Composable
+private fun TtsModelStatusCard(state: TtsModelState) {
+    val (title, subtitle) = when (state) {
+        TtsModelState.Idle -> "موتور صدای فارسی" to "در حال آماده‌سازی…"
+        is TtsModelState.Downloading -> "دانلود مدل صدا" to "پیشرفت: ${state.progress}٪ — فقط یک‌بار"
+        TtsModelState.Extracting -> "نصب مدل صدا" to "لطفاً چند ثانیه صبر کنید"
+        TtsModelState.Ready -> "موتور صدای فارسی" to "آماده — صدای طبیعی آفلاین (بدون TTS سیستم)"
+        is TtsModelState.Error -> "خطای مدل صدا" to state.message
+    }
+    SectionLabel(title = title, subtitle = subtitle)
 }
