@@ -18,6 +18,7 @@ import com.callerannouncer.app.MainActivity
 import com.callerannouncer.app.R
 import com.callerannouncer.app.data.preferences.SettingsRepository
 import com.callerannouncer.app.domain.model.PlayMode
+import com.callerannouncer.app.service.tts.PlaybackRoute
 import com.callerannouncer.app.service.tts.TtsModelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,6 +45,12 @@ class AnnouncerService : Service() {
         audioRoutingManager = AudioRoutingManager(applicationContext)
         startInForeground()
         isRunning = true
+        scope.launch(Dispatchers.IO) {
+            if (TtsModelManager.ensureModelReady(applicationContext)) {
+                val warmed = ttsManager.warmUp()
+                Log.i(TAG, "TTS warm-up result=$warmed")
+            }
+        }
         Log.i(TAG, "Service created")
     }
 
@@ -81,6 +88,7 @@ class AnnouncerService : Service() {
             pitch = settings.pitch,
             playMode = settings.playMode,
             forcePlay = false,
+            forIncomingCall = true,
         )
     }
 
@@ -137,6 +145,7 @@ class AnnouncerService : Service() {
         pitch: Float,
         playMode: PlayMode,
         forcePlay: Boolean,
+        forIncomingCall: Boolean = false,
     ): Boolean {
         return speakMutex.withLock {
             if (!forcePlay && !audioRoutingManager.shouldAnnounce(playMode)) {
@@ -147,17 +156,34 @@ class AnnouncerService : Service() {
                 Log.e(TAG, "TTS model not ready")
                 return@withLock false
             }
-            val focusOk = audioRoutingManager.requestFocusAndRoute()
-            if (!focusOk) {
-                Log.w(TAG, "Audio focus denied — continuing anyway")
+            if (forIncomingCall) {
+                audioRoutingManager.beginIncomingCallAnnouncement()
+            } else {
+                val focusOk = audioRoutingManager.requestFocusAndRoute()
+                if (!focusOk) {
+                    Log.w(TAG, "Audio focus denied — continuing anyway")
+                }
             }
             try {
                 ttsManager.setSpeechParams(rate, pitch)
-                val spoken = ttsManager.speakAndAwait(text, repeatCount)
-                Log.i(TAG, "speak result=$spoken text=$text")
+                val route = if (forIncomingCall) {
+                    PlaybackRoute.INCOMING_CALL
+                } else {
+                    PlaybackRoute.MEDIA
+                }
+                val spoken = ttsManager.speakAndAwait(
+                    text = text,
+                    repeatCount = repeatCount,
+                    route = route,
+                )
+                Log.i(TAG, "speak result=$spoken incoming=$forIncomingCall text=$text")
                 spoken
             } finally {
-                audioRoutingManager.release()
+                if (forIncomingCall) {
+                    audioRoutingManager.endIncomingCallAnnouncement()
+                } else {
+                    audioRoutingManager.release()
+                }
             }
         }
     }

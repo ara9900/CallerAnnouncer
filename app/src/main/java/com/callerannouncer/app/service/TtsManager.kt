@@ -2,6 +2,7 @@ package com.callerannouncer.app.service
 
 import android.content.Context
 import com.callerannouncer.app.service.tts.OfflinePersianTtsEngine
+import com.callerannouncer.app.service.tts.PlaybackRoute
 import com.callerannouncer.app.service.tts.TtsModelManager
 
 /**
@@ -18,8 +19,18 @@ class TtsManager(context: Context) {
         speechRate = rate.coerceIn(0.6f, 1.6f)
     }
 
-    suspend fun speakAndAwait(text: String, repeatCount: Int = 1): Boolean =
-        engine.speak(text = text, speed = speechRate, repeatCount = repeatCount)
+    suspend fun warmUp(): Boolean = engine.warmUp()
+
+    suspend fun speakAndAwait(
+        text: String,
+        repeatCount: Int = 1,
+        route: PlaybackRoute = PlaybackRoute.MEDIA,
+    ): Boolean = engine.speak(
+        text = text,
+        speed = speechRate,
+        repeatCount = repeatCount,
+        route = route,
+    )
 
     fun stop() = engine.stop()
 

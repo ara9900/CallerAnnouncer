@@ -10,23 +10,23 @@ import android.util.Log
  * Streams PCM float samples through [AudioTrack] and waits until playback finishes
  * before returning (stopping early causes only a brief click/noise).
  */
-class PcmAudioPlayer(sampleRate: Int) {
+class PcmAudioPlayer(private val sampleRate: Int) {
 
-    private val sampleRate: Int = sampleRate
-    private var track: AudioTrack? = createTrack(sampleRate)
+    private var track: AudioTrack? = null
+    private var activeRoute: PlaybackRoute? = null
     @Volatile
     private var stopped = false
 
-    fun beginSession() {
+    fun beginSession(route: PlaybackRoute) {
         stopped = false
-        var audioTrack = track
-        if (audioTrack == null || audioTrack.state != AudioTrack.STATE_INITIALIZED) {
-            audioTrack?.release()
-            audioTrack = createTrack(sampleRate)
-            track = audioTrack
+        if (track == null || activeRoute != route || track?.state != AudioTrack.STATE_INITIALIZED) {
+            track?.release()
+            track = createTrack(sampleRate, route)
+            activeRoute = route
         }
-        if (audioTrack.state != AudioTrack.STATE_INITIALIZED) {
-            Log.e(TAG, "AudioTrack not initialized")
+        val audioTrack = track
+        if (audioTrack == null || audioTrack.state != AudioTrack.STATE_INITIALIZED) {
+            Log.e(TAG, "AudioTrack not initialized for route=$route")
             return
         }
         audioTrack.pause()
@@ -85,11 +85,10 @@ class PcmAudioPlayer(sampleRate: Int) {
         stop()
         track?.release()
         track = null
+        activeRoute = null
     }
 
-    private fun createTrack(sampleRate: Int): AudioTrack {
-        // Must use getMinBufferSize as-is (bytes). Do NOT coerce to sampleRate — that value
-        // is in samples and is often not a multiple of 4, which breaks PCM_FLOAT on Android.
+    private fun createTrack(sampleRate: Int, route: PlaybackRoute): AudioTrack {
         val bufferBytes = AudioTrack.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
@@ -99,10 +98,16 @@ class PcmAudioPlayer(sampleRate: Int) {
             "AudioTrack.getMinBufferSize failed ($bufferBytes) for rate=$sampleRate"
         }
 
-        val attrs = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-            .build()
+        val attrs = when (route) {
+            PlaybackRoute.MEDIA -> AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            PlaybackRoute.INCOMING_CALL -> AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+        }
 
         val format = AudioFormat.Builder()
             .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)

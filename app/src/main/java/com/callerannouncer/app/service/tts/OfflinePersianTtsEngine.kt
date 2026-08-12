@@ -58,7 +58,14 @@ class OfflinePersianTtsEngine(private val context: Context) {
         }
     }
 
-    suspend fun speak(text: String, speed: Float, repeatCount: Int): Boolean {
+    suspend fun warmUp(): Boolean = ensureReady()
+
+    suspend fun speak(
+        text: String,
+        speed: Float,
+        repeatCount: Int,
+        route: PlaybackRoute = PlaybackRoute.MEDIA,
+    ): Boolean {
         if (text.isBlank()) return false
         if (!ensureReady()) return false
 
@@ -73,7 +80,7 @@ class OfflinePersianTtsEngine(private val context: Context) {
                     if (index > 0) {
                         Thread.sleep(250)
                     }
-                    player.beginSession()
+                    player.beginSession(route)
 
                     val callback: (FloatArray) -> Int = { chunk ->
                         when {
