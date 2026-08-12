@@ -58,6 +58,12 @@ class AudioRoutingManager(context: Context) {
         acquireWakeLock()
 
         try {
+            // Prevent Android from switching the device into an "in-call" audio mode
+            // that commonly mutes media/TTS streams.
+            if (audioManager.mode != AudioManager.MODE_NORMAL) {
+                audioManager.mode = AudioManager.MODE_NORMAL
+            }
+
             savedRingVolume = audioManager.getStreamVolume(AudioManager.STREAM_RING)
             val maxRing = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
             val ducked = (maxRing * 0.08f).toInt().coerceAtLeast(0)
@@ -68,6 +74,8 @@ class AudioRoutingManager(context: Context) {
         }
 
         boostAnnouncementStreamVolume()
+        // Also make sure the media stream isn't at 0 (some OEMs mirror ring behavior).
+        boostMediaVolumeIfSilent()
 
         try {
             if (audioManager.isBluetoothScoOn) {
