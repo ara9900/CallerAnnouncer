@@ -120,10 +120,10 @@ class AnnouncerService : Service() {
             Toast.makeText(
                 applicationContext,
                 when {
-                    ok -> "در حال پخش آزمایش صدا"
+                    ok -> "آزمایش صدا پخش شد"
                     !TtsModelManager.isModelReady(applicationContext) ->
-                        "در حال دانلود مدل صدای فارسی… دوباره امتحان کنید"
-                    else -> "پخش صدا ناموفق بود"
+                        "مدل صدای فارسی هنوز آماده نیست — اینترنت را چک کنید و صبر کنید"
+                    else -> "پخش صدا ناموفق بود — ولوم رسانه را بالا ببرید"
                 },
                 Toast.LENGTH_LONG,
             ).show()

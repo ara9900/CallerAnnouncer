@@ -73,12 +73,38 @@ class OfflinePersianTtsEngine(private val context: Context) {
                     if (index > 0) {
                         Thread.sleep(250)
                     }
-                    val audio = engine.generate(text = text, sid = 0, speed = normalizedSpeed)
+                    player.beginSession()
+
+                    val callback: (FloatArray) -> Int = { chunk ->
+                        if (player.isStopped()) {
+                            0
+                        } else {
+                            player.writeSamples(chunk)
+                            1
+                        }
+                    }
+
+                    val audio = engine.generateWithCallback(
+                        text = text,
+                        sid = 0,
+                        speed = normalizedSpeed,
+                        callback = callback,
+                    )
+
                     if (audio.samples.isEmpty()) {
-                        Log.e(TAG, "Generated empty audio")
+                        Log.e(TAG, "Generated empty audio for text=$text")
+                        player.endSession()
                         return@withContext false
                     }
-                    player.playBlocking(audio.samples)
+
+                    val durationSec = audio.samples.size.toFloat() / engine.sampleRate()
+                    Log.i(
+                        TAG,
+                        "Generated ${audio.samples.size} samples (~${"%.1f".format(durationSec)}s)",
+                    )
+
+                    player.awaitPlayback(audio.samples.size)
+                    player.endSession()
                 }
                 true
             } catch (e: Exception) {
@@ -96,6 +122,7 @@ class OfflinePersianTtsEngine(private val context: Context) {
         stop()
         tts?.release()
         tts = null
+        audioPlayer?.release()
         audioPlayer = null
     }
 
