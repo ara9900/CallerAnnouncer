@@ -39,7 +39,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.domain.model.PlayMode
+import com.callerannouncer.app.domain.model.TtsEngineMode
 import com.callerannouncer.app.ui.components.AppBackground
 import com.callerannouncer.app.ui.components.SectionLabel
 import com.callerannouncer.app.ui.theme.AppColors
@@ -96,6 +98,32 @@ fun SettingsScreen(
                     checked = settings.readSmsBody,
                     onCheckedChange = viewModel::setReadSmsBody,
                 )
+            }
+
+            SectionLabel(title = "موتور صدا", subtitle = "آفلاین یا آنلاین رایگان — برای مقایسه کیفیت")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                TtsEngineMode.entries.forEach { mode ->
+                    PlayModeOption(
+                        selected = settings.ttsEngineMode == mode,
+                        title = ttsEngineModeLabel(mode),
+                        subtitle = ttsEngineModeHint(mode),
+                        onClick = { viewModel.setTtsEngineMode(mode) },
+                    )
+                }
+            }
+
+            if (settings.ttsEngineMode == TtsEngineMode.ONLINE_EDGE) {
+                SectionLabel(title = "صدای آنلاین", subtitle = "Microsoft Edge — Dilara یا Farid")
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OnlineEdgeVoice.entries.forEach { voice ->
+                        PlayModeOption(
+                            selected = settings.onlineEdgeVoice == voice,
+                            title = onlineEdgeVoiceLabel(voice),
+                            subtitle = onlineEdgeVoiceHint(voice),
+                            onClick = { viewModel.setOnlineEdgeVoice(voice) },
+                        )
+                    }
+                }
             }
 
             SectionLabel(title = "صدا", subtitle = "سرعت، زیر و بمی و تعداد تکرار")
@@ -297,6 +325,26 @@ private fun StyledField(
             unfocusedContainerColor = AppColors.Paper,
         ),
     )
+}
+
+private fun ttsEngineModeLabel(mode: TtsEngineMode): String = when (mode) {
+    TtsEngineMode.OFFLINE -> "آفلاین (Piper امیر)"
+    TtsEngineMode.ONLINE_EDGE -> "آنلاین رایگان (Microsoft Edge)"
+}
+
+private fun ttsEngineModeHint(mode: TtsEngineMode): String = when (mode) {
+    TtsEngineMode.OFFLINE -> "بدون اینترنت بعد از دانلود مدل — داخل اپ"
+    TtsEngineMode.ONLINE_EDGE -> "نیاز به اینترنت — بدون API key و هزینه"
+}
+
+private fun onlineEdgeVoiceLabel(voice: OnlineEdgeVoice): String = when (voice) {
+    OnlineEdgeVoice.DILARA -> "دیلارا (زن)"
+    OnlineEdgeVoice.FARID -> "فرید (مرد)"
+}
+
+private fun onlineEdgeVoiceHint(voice: OnlineEdgeVoice): String = when (voice) {
+    OnlineEdgeVoice.DILARA -> "fa-IR-DilaraNeural — Azure neural فارسی"
+    OnlineEdgeVoice.FARID -> "fa-IR-FaridNeural — Azure neural فارسی"
 }
 
 private fun playModeLabel(mode: PlayMode): String = when (mode) {

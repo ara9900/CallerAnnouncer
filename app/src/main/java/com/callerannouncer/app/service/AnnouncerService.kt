@@ -17,7 +17,9 @@ import androidx.core.app.ServiceCompat
 import com.callerannouncer.app.MainActivity
 import com.callerannouncer.app.R
 import com.callerannouncer.app.data.preferences.SettingsRepository
+import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.domain.model.PlayMode
+import com.callerannouncer.app.domain.model.TtsEngineMode
 import com.callerannouncer.app.service.tts.PlaybackRoute
 import com.callerannouncer.app.service.tts.TtsModelManager
 import kotlinx.coroutines.CoroutineScope
@@ -48,9 +50,13 @@ class AnnouncerService : Service() {
         startInForeground()
         isRunning = true
         scope.launch(Dispatchers.IO) {
-            if (TtsModelManager.ensureModelReady(applicationContext)) {
+            val settings = settingsRepository.settingsFlow.first()
+            ttsManager.configure(settings.ttsEngineMode, settings.onlineEdgeVoice)
+            if (settings.ttsEngineMode == TtsEngineMode.OFFLINE &&
+                TtsModelManager.ensureModelReady(applicationContext)
+            ) {
                 val warmed = ttsManager.warmUp()
-                Log.i(TAG, "TTS warm-up result=$warmed")
+                Log.i(TAG, "Offline TTS warm-up result=$warmed")
             }
         }
         Log.i(TAG, "Service created")
@@ -97,6 +103,8 @@ class AnnouncerService : Service() {
             playMode = settings.playMode,
             forcePlay = false,
             forIncomingCall = true,
+            ttsEngineMode = settings.ttsEngineMode,
+            onlineEdgeVoice = settings.onlineEdgeVoice,
         )
     }
 
@@ -119,26 +127,39 @@ class AnnouncerService : Service() {
             pitch = settings.pitch,
             playMode = settings.playMode,
             forcePlay = false,
+            ttsEngineMode = settings.ttsEngineMode,
+            onlineEdgeVoice = settings.onlineEdgeVoice,
         )
     }
 
     private suspend fun announceTest() {
         val settings = settingsRepository.settingsFlow.first()
+        val testText = when (settings.ttsEngineMode) {
+            TtsEngineMode.OFFLINE ->
+                "این یک آزمایش صدای اعلام‌گر با موتور فارسی آفلاین است"
+            TtsEngineMode.ONLINE_EDGE ->
+                "این یک آزمایش صدای آنلاین مایکروسافت اج است"
+        }
         val ok = speak(
-            text = "این یک آزمایش صدای اعلام‌گر با موتور فارسی آفلاین است",
+            text = testText,
             repeatCount = 1,
             rate = settings.speechRate,
             pitch = settings.pitch,
             playMode = PlayMode.ALWAYS,
             forcePlay = true,
+            ttsEngineMode = settings.ttsEngineMode,
+            onlineEdgeVoice = settings.onlineEdgeVoice,
         )
         withContext(Dispatchers.Main) {
             Toast.makeText(
                 applicationContext,
                 when {
                     ok -> "آزمایش صدا پخش شد"
-                    !TtsModelManager.isModelReady(applicationContext) ->
+                    settings.ttsEngineMode == TtsEngineMode.OFFLINE &&
+                        !TtsModelManager.isModelReady(applicationContext) ->
                         "مدل صدای فارسی هنوز آماده نیست — اینترنت را چک کنید و صبر کنید"
+                    settings.ttsEngineMode == TtsEngineMode.ONLINE_EDGE ->
+                        "پخش آنلاین ناموفق بود — اینترنت را بررسی کنید"
                     else -> "پخش صدا ناموفق بود — اپ را ببندید و دوباره باز کنید"
                 },
                 Toast.LENGTH_LONG,
@@ -154,14 +175,19 @@ class AnnouncerService : Service() {
         playMode: PlayMode,
         forcePlay: Boolean,
         forIncomingCall: Boolean = false,
+        ttsEngineMode: TtsEngineMode,
+        onlineEdgeVoice: OnlineEdgeVoice,
     ): Boolean {
         return speakMutex.withLock {
             if (!forcePlay && !audioRoutingManager.shouldAnnounce(playMode)) {
                 Log.i(TAG, "Skipped by playMode=$playMode")
                 return@withLock false
             }
-            if (!TtsModelManager.ensureModelReady(applicationContext)) {
-                Log.e(TAG, "TTS model not ready")
+            ttsManager.configure(ttsEngineMode, onlineEdgeVoice)
+            if (ttsEngineMode == TtsEngineMode.OFFLINE &&
+                !TtsModelManager.ensureModelReady(applicationContext)
+            ) {
+                Log.e(TAG, "Offline TTS model not ready")
                 return@withLock false
             }
             if (forIncomingCall) {
@@ -189,7 +215,8 @@ class AnnouncerService : Service() {
                 )
                 Log.i(
                     TAG,
-                    "speak result=$spoken incoming=$forIncomingCall headset=${headsetDevice != null} text=$text",
+                    "speak result=$spoken mode=$ttsEngineMode incoming=$forIncomingCall " +
+                        "headset=${headsetDevice != null} text=$text",
                 )
                 spoken
             } finally {

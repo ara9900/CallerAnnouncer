@@ -11,8 +11,8 @@ android {
         applicationId = "com.callerannouncer.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 12
-        versionName = "1.1.9"
+        versionCode = 13
+        versionName = "1.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
@@ -76,6 +76,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation(files("libs/sherpa-onnx.aar"))
     implementation("org.apache.commons:commons-compress:1.26.2")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

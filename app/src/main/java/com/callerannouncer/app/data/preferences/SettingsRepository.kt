@@ -9,7 +9,9 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.domain.model.PlayMode
+import com.callerannouncer.app.domain.model.TtsEngineMode
 import com.callerannouncer.app.domain.model.UserSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -26,6 +28,8 @@ class SettingsRepository(private val context: Context) {
         val READ_SMS_BODY = booleanPreferencesKey("read_sms_body")
         val REPEAT_COUNT = intPreferencesKey("repeat_count")
         val PLAY_MODE = stringPreferencesKey("play_mode")
+        val TTS_ENGINE_MODE = stringPreferencesKey("tts_engine_mode")
+        val ONLINE_EDGE_VOICE = stringPreferencesKey("online_edge_voice")
         val CALL_PREFIX = stringPreferencesKey("call_prefix")
         val CALL_SUFFIX = stringPreferencesKey("call_suffix")
         val SPEECH_RATE = floatPreferencesKey("speech_rate")
@@ -40,6 +44,12 @@ class SettingsRepository(private val context: Context) {
             readSmsBody = prefs[Keys.READ_SMS_BODY] ?: false,
             repeatCount = (prefs[Keys.REPEAT_COUNT] ?: 2).coerceIn(1, 5),
             playMode = PlayMode.fromName(prefs[Keys.PLAY_MODE] ?: PlayMode.ALWAYS.name),
+            ttsEngineMode = TtsEngineMode.fromName(
+                prefs[Keys.TTS_ENGINE_MODE] ?: TtsEngineMode.OFFLINE.name,
+            ),
+            onlineEdgeVoice = OnlineEdgeVoice.fromName(
+                prefs[Keys.ONLINE_EDGE_VOICE] ?: OnlineEdgeVoice.DILARA.name,
+            ),
             callPrefix = prefs[Keys.CALL_PREFIX] ?: "تماس از طرف",
             callSuffix = prefs[Keys.CALL_SUFFIX] ?: "در حال زنگ زدن است",
             speechRate = prefs[Keys.SPEECH_RATE] ?: 1.0f,
@@ -66,6 +76,14 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setPlayMode(mode: PlayMode) {
         context.settingsDataStore.edit { it[Keys.PLAY_MODE] = mode.name }
+    }
+
+    suspend fun setTtsEngineMode(mode: TtsEngineMode) {
+        context.settingsDataStore.edit { it[Keys.TTS_ENGINE_MODE] = mode.name }
+    }
+
+    suspend fun setOnlineEdgeVoice(voice: OnlineEdgeVoice) {
+        context.settingsDataStore.edit { it[Keys.ONLINE_EDGE_VOICE] = voice.name }
     }
 
     suspend fun setCallPrefix(prefix: String) {

@@ -4,7 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.callerannouncer.app.data.preferences.SettingsRepository
+import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.domain.model.PlayMode
+import com.callerannouncer.app.domain.model.TtsEngineMode
 import com.callerannouncer.app.domain.model.UserSettings
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +28,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun setPlayMode(mode: PlayMode) =
         viewModelScope.launch { repository.setPlayMode(mode) }
+
+    fun setTtsEngineMode(mode: TtsEngineMode) =
+        viewModelScope.launch { repository.setTtsEngineMode(mode) }
+
+    fun setOnlineEdgeVoice(voice: OnlineEdgeVoice) =
+        viewModelScope.launch { repository.setOnlineEdgeVoice(voice) }
 
     fun setCallPrefix(value: String) =
         viewModelScope.launch { repository.setCallPrefix(value) }
