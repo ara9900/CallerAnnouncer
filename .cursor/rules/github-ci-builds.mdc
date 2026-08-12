@@ -1,0 +1,13 @@
+---
+description: Always build APK via GitHub Actions; no local Gradle builds
+alwaysApply: true
+---
+
+# CallerAnnouncer build policy
+
+- After meaningful code changes: commit, push to `master`/`main`, and let GitHub Actions build the debug APK.
+- Do **not** run local `./gradlew assembleDebug` (or similar) unless the user explicitly asks — this machine is weak.
+- After push, wait for the Actions run and share:
+  - Actions run URL
+  - Artifact name: `CallerAnnouncer-Debug-APK`
+- Speak with the user in Persian for this project.
