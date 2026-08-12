@@ -3,6 +3,8 @@ package com.callerannouncer.app.receiver
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import android.telephony.TelephonyManager
 import android.util.Log
 import com.callerannouncer.app.service.AnnouncerService
@@ -33,6 +35,25 @@ class PhoneCallReceiver : BroadcastReceiver() {
 
     private fun handleRinging(context: Context, intent: Intent) {
         val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER).orEmpty()
+        pendingAnnounceRunnable?.let { handler.removeCallbacks(it) }
+        pendingAnnounceRunnable = null
+
+        if (number.isBlank()) {
+            // Samsung and some OEMs fire RINGING twice: first without number, then with it.
+            val appContext = context.applicationContext
+            pendingAnnounceRunnable = Runnable {
+                pendingAnnounceRunnable = null
+                announceRinging(appContext, "")
+            }
+            handler.postDelayed(pendingAnnounceRunnable!!, BLANK_NUMBER_DELAY_MS)
+            Log.i(TAG, "RINGING without number — waiting ${BLANK_NUMBER_DELAY_MS}ms for caller id")
+            return
+        }
+
+        announceRinging(context.applicationContext, number)
+    }
+
+    private fun announceRinging(context: Context, number: String) {
         if (!shouldAnnounce(number)) {
             Log.i(TAG, "Skipping duplicate ring event for number=$number")
             return
@@ -42,13 +63,15 @@ class PhoneCallReceiver : BroadcastReceiver() {
 
         Log.i(TAG, "Incoming call from=$number name=$displayName")
         AnnouncerService.announceCall(
-            context = context.applicationContext,
+            context = context,
             displayName = displayName,
             phoneNumber = number,
         )
     }
 
     private fun resetDebounce() {
+        pendingAnnounceRunnable?.let { handler.removeCallbacks(it) }
+        pendingAnnounceRunnable = null
         lastNumber = ""
         lastAnnounceAt.set(0)
     }
@@ -66,6 +89,12 @@ class PhoneCallReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "PhoneCallReceiver"
         private const val DEBOUNCE_MS = 15_000L
+        private const val BLANK_NUMBER_DELAY_MS = 350L
+
+        private val handler = Handler(Looper.getMainLooper())
+
+        @Volatile
+        private var pendingAnnounceRunnable: Runnable? = null
 
         @Volatile
         private var lastNumber: String = ""

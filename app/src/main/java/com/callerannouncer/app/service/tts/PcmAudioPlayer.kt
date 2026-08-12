@@ -17,6 +17,11 @@ class PcmAudioPlayer(private val sampleRate: Int) {
     @Volatile
     private var stopped = false
 
+    /** Clears a prior [stop] so a new [speak] session can start. */
+    fun resetCancellation() {
+        stopped = false
+    }
+
     fun beginSession(route: PlaybackRoute) {
         stopped = false
         if (track == null || activeRoute != route || track?.state != AudioTrack.STATE_INITIALIZED) {

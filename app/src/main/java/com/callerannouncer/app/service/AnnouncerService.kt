@@ -22,6 +22,7 @@ import com.callerannouncer.app.service.tts.PlaybackRoute
 import com.callerannouncer.app.service.tts.TtsModelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
@@ -37,6 +38,7 @@ class AnnouncerService : Service() {
     private lateinit var ttsManager: TtsManager
     private lateinit var audioRoutingManager: AudioRoutingManager
     private val speakMutex = Mutex()
+    private var activeCallAnnounceJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -60,7 +62,10 @@ class AnnouncerService : Service() {
             ACTION_ANNOUNCE_CALL -> {
                 val name = intent.getStringExtra(EXTRA_DISPLAY_NAME).orEmpty()
                 val number = intent.getStringExtra(EXTRA_PHONE_NUMBER).orEmpty()
-                scope.launch { announceCall(name.ifBlank { number.ifBlank { "ناشناس" } }) }
+                activeCallAnnounceJob?.cancel()
+                activeCallAnnounceJob = scope.launch {
+                    announceCall(name.ifBlank { number.ifBlank { "ناشناس" } })
+                }
             }
             ACTION_ANNOUNCE_SMS -> {
                 val sender = intent.getStringExtra(EXTRA_DISPLAY_NAME).orEmpty()
@@ -194,8 +199,11 @@ class AnnouncerService : Service() {
     }
 
     private fun stopActiveCallAnnouncement() {
+        activeCallAnnounceJob?.cancel()
+        activeCallAnnounceJob = null
         if (!isAnnouncingIncomingCall) return
         Log.i(TAG, "Stopping active call announcement")
+        isAnnouncingIncomingCall = false
         ttsManager.stop()
         audioRoutingManager.endIncomingCallAnnouncement()
     }

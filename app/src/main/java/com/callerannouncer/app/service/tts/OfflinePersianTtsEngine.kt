@@ -76,13 +76,15 @@ class OfflinePersianTtsEngine(private val context: Context) {
 
         return withContext(Dispatchers.IO) {
             try {
+                // stop() from a previous call leaves stopped=true until we reset it here.
+                player.resetCancellation()
                 repeat(times) { index ->
-                    if (player.isStopped()) {
-                        Log.i(TAG, "speak cancelled before repeat $index")
-                        return@withContext false
-                    }
                     if (index > 0) {
                         Thread.sleep(250)
+                        if (player.isStopped()) {
+                            Log.i(TAG, "speak cancelled before repeat $index")
+                            return@withContext false
+                        }
                     }
                     player.beginSession(route)
 
