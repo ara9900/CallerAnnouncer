@@ -2,7 +2,6 @@ package com.callerannouncer.app.service
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothHeadset
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.content.Context
@@ -16,7 +15,8 @@ import androidx.core.content.ContextCompat
 import com.callerannouncer.app.domain.model.PlayMode
 
 /**
- * Handles audio focus and routes announcements to wired/Bluetooth headsets when available.
+ * Handles audio focus. Avoids Bluetooth SCO for TTS media playback
+ * (SCO is for call audio and often mutes media/TTS output).
  */
 class AudioRoutingManager(context: Context) {
 
@@ -25,7 +25,6 @@ class AudioRoutingManager(context: Context) {
         appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     private var focusRequest: AudioFocusRequest? = null
-    private var scoStarted = false
 
     fun shouldAnnounce(playMode: PlayMode): Boolean {
         return when (playMode) {
@@ -47,39 +46,41 @@ class AudioRoutingManager(context: Context) {
     }
 
     fun requestFocusAndRoute(): Boolean {
-        val granted = requestAudioFocus()
-        if (!granted) return false
-
-        if (isBluetoothHeadsetConnected() || audioManager.isBluetoothA2dpOn) {
-            try {
-                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-                audioManager.startBluetoothSco()
-                audioManager.isBluetoothScoOn = true
-                scoStarted = true
-            } catch (e: Exception) {
-                Log.w(TAG, "Bluetooth SCO start failed", e)
+        // Ensure media stream is not at zero for audible test/announce
+        try {
+            if (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) == 0) {
+                val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                val target = (max * 0.4f).toInt().coerceAtLeast(1)
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                Log.i(TAG, "STREAM_MUSIC was 0; raised to $target")
             }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not adjust media volume", e)
         }
-        return true
+
+        // Keep mode normal so TTS uses media path (not call/SCO)
+        try {
+            if (audioManager.mode != AudioManager.MODE_NORMAL) {
+                audioManager.mode = AudioManager.MODE_NORMAL
+            }
+            if (audioManager.isBluetoothScoOn) {
+                audioManager.stopBluetoothSco()
+                audioManager.isBluetoothScoOn = false
+            }
+        } catch (_: Exception) {
+        }
+
+        return requestAudioFocus()
     }
 
     fun release() {
-        try {
-            if (scoStarted) {
-                audioManager.stopBluetoothSco()
-                audioManager.isBluetoothScoOn = false
-                scoStarted = false
-            }
-            audioManager.mode = AudioManager.MODE_NORMAL
-        } catch (_: Exception) {
-        }
         abandonAudioFocus()
     }
 
     private fun requestAudioFocus(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build()
             val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
@@ -87,7 +88,8 @@ class AudioRoutingManager(context: Context) {
                 .setOnAudioFocusChangeListener { }
                 .build()
             focusRequest = request
-            audioManager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            val result = audioManager.requestAudioFocus(request)
+            result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         } else {
             @Suppress("DEPRECATION")
             audioManager.requestAudioFocus(
@@ -119,10 +121,9 @@ class AudioRoutingManager(context: Context) {
 
         return try {
             val manager = appContext.getSystemService(BluetoothManager::class.java)
-            val adapter: BluetoothAdapter? = manager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
+            val adapter: BluetoothAdapter? = manager?.adapter ?: @Suppress("DEPRECATION") BluetoothAdapter.getDefaultAdapter()
             if (adapter == null || !adapter.isEnabled) return false
-            val devices = adapter.getProfileConnectionState(BluetoothProfile.HEADSET)
-            devices == BluetoothProfile.STATE_CONNECTED ||
+            adapter.getProfileConnectionState(BluetoothProfile.HEADSET) == BluetoothProfile.STATE_CONNECTED ||
                 adapter.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothProfile.STATE_CONNECTED
         } catch (e: SecurityException) {
             Log.w(TAG, "Bluetooth permission missing", e)
@@ -141,7 +142,5 @@ class AudioRoutingManager(context: Context) {
 
     companion object {
         private const val TAG = "AudioRoutingManager"
-        @Suppress("unused")
-        private val HEADSET_PROFILE = BluetoothHeadset::class.java
     }
 }

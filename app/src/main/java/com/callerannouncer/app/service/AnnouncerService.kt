@@ -11,11 +11,13 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.callerannouncer.app.MainActivity
 import com.callerannouncer.app.R
 import com.callerannouncer.app.data.preferences.SettingsRepository
+import com.callerannouncer.app.domain.model.PlayMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class AnnouncerService : Service() {
 
@@ -40,9 +43,11 @@ class AnnouncerService : Service() {
         audioRoutingManager = AudioRoutingManager(applicationContext)
         startInForeground()
         isRunning = true
+        Log.i(TAG, "Service created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(TAG, "onStartCommand action=${intent?.action}")
         when (intent?.action) {
             ACTION_ANNOUNCE_CALL -> {
                 val name = intent.getStringExtra(EXTRA_DISPLAY_NAME).orEmpty()
@@ -55,7 +60,7 @@ class AnnouncerService : Service() {
                 scope.launch { announceSms(sender.ifBlank { "ناشناس" }, body) }
             }
             ACTION_TEST_VOICE -> {
-                scope.launch { announceRaw("این یک آزمایش صدای اعلام‌کننده تماس و پیامک است") }
+                scope.launch { announceTest() }
             }
             ACTION_STOP -> {
                 stopSelf()
@@ -68,7 +73,14 @@ class AnnouncerService : Service() {
         val settings = settingsRepository.settingsFlow.first()
         if (!settings.isCallAnnouncerEnabled) return
         val text = "${settings.callPrefix} $displayName ${settings.callSuffix}"
-        speak(text, settings.repeatCount, settings.speechRate, settings.pitch, settings.playMode)
+        speak(
+            text = text,
+            repeatCount = settings.repeatCount,
+            rate = settings.speechRate,
+            pitch = settings.pitch,
+            playMode = settings.playMode,
+            forcePlay = false,
+        )
     }
 
     private suspend fun announceSms(sender: String, body: String) {
@@ -83,12 +95,33 @@ class AnnouncerService : Service() {
                 append(body)
             }
         }
-        speak(text, settings.repeatCount, settings.speechRate, settings.pitch, settings.playMode)
+        speak(
+            text = text,
+            repeatCount = settings.repeatCount,
+            rate = settings.speechRate,
+            pitch = settings.pitch,
+            playMode = settings.playMode,
+            forcePlay = false,
+        )
     }
 
-    private suspend fun announceRaw(text: String) {
+    private suspend fun announceTest() {
         val settings = settingsRepository.settingsFlow.first()
-        speak(text, 1, settings.speechRate, settings.pitch, settings.playMode)
+        val ok = speak(
+            text = "این یک آزمایش صدای اعلام‌گر است",
+            repeatCount = 1,
+            rate = settings.speechRate,
+            pitch = settings.pitch,
+            playMode = PlayMode.ALWAYS,
+            forcePlay = true,
+        )
+        withContext(Dispatchers.Main) {
+            Toast.makeText(
+                applicationContext,
+                if (ok) "در حال پخش آزمایش صدا" else "موتور صدا آماده نیست. موتور TTS فارسی را در تنظیمات گوشی نصب کنید",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     private suspend fun speak(
@@ -96,19 +129,23 @@ class AnnouncerService : Service() {
         repeatCount: Int,
         rate: Float,
         pitch: Float,
-        playMode: com.callerannouncer.app.domain.model.PlayMode,
-    ) {
-        speakMutex.withLock {
-            if (!audioRoutingManager.shouldAnnounce(playMode)) {
+        playMode: PlayMode,
+        forcePlay: Boolean,
+    ): Boolean {
+        return speakMutex.withLock {
+            if (!forcePlay && !audioRoutingManager.shouldAnnounce(playMode)) {
                 Log.i(TAG, "Skipped by playMode=$playMode")
-                return
+                return@withLock false
             }
-            if (!audioRoutingManager.requestFocusAndRoute()) {
-                Log.w(TAG, "Audio focus denied")
+            val focusOk = audioRoutingManager.requestFocusAndRoute()
+            if (!focusOk) {
+                Log.w(TAG, "Audio focus denied — continuing anyway")
             }
             try {
                 ttsManager.setSpeechParams(rate, pitch)
-                ttsManager.speakAndAwait(text, repeatCount)
+                val spoken = ttsManager.speakAndAwait(text, repeatCount)
+                Log.i(TAG, "speak result=$spoken text=$text")
+                spoken
             } finally {
                 audioRoutingManager.release()
             }
@@ -189,13 +226,16 @@ class AnnouncerService : Service() {
         var isRunning: Boolean = false
             private set
 
-        fun start(context: Context) {
-            val intent = Intent(context, AnnouncerService::class.java)
+        private fun startServiceCompat(context: Context, intent: Intent) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
                 context.startService(intent)
             }
+        }
+
+        fun start(context: Context) {
+            startServiceCompat(context, Intent(context, AnnouncerService::class.java))
         }
 
         fun stop(context: Context) {
@@ -207,31 +247,28 @@ class AnnouncerService : Service() {
         }
 
         fun announceCall(context: Context, displayName: String, phoneNumber: String) {
-            start(context)
             val intent = Intent(context, AnnouncerService::class.java).apply {
                 action = ACTION_ANNOUNCE_CALL
                 putExtra(EXTRA_DISPLAY_NAME, displayName)
                 putExtra(EXTRA_PHONE_NUMBER, phoneNumber)
             }
-            context.startService(intent)
+            startServiceCompat(context, intent)
         }
 
         fun announceSms(context: Context, displayName: String, body: String) {
-            start(context)
             val intent = Intent(context, AnnouncerService::class.java).apply {
                 action = ACTION_ANNOUNCE_SMS
                 putExtra(EXTRA_DISPLAY_NAME, displayName)
                 putExtra(EXTRA_SMS_BODY, body)
             }
-            context.startService(intent)
+            startServiceCompat(context, intent)
         }
 
         fun testVoice(context: Context) {
-            start(context)
             val intent = Intent(context, AnnouncerService::class.java).apply {
                 action = ACTION_TEST_VOICE
             }
-            context.startService(intent)
+            startServiceCompat(context, intent)
         }
     }
 }
