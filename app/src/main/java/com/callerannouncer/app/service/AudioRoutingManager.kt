@@ -11,13 +11,15 @@ import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.callerannouncer.app.domain.model.PlayMode
 
 /**
- * Handles audio focus and ringtone ducking so TTS can be heard during incoming calls.
+ * Handles audio focus and ringtone silencing so TTS can be heard during incoming calls.
  */
 class AudioRoutingManager(context: Context) {
 
@@ -26,12 +28,15 @@ class AudioRoutingManager(context: Context) {
         appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val powerManager =
         appContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var focusRequest: AudioFocusRequest? = null
     private var savedRingVolume: Int? = null
+    private var savedRingerMode: Int? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var incomingCallSessionActive = false
     private var savedSpeakerphoneOn: Boolean? = null
+    private var ringSilenceKeepAlive: Runnable? = null
 
     fun shouldAnnounce(playMode: PlayMode): Boolean {
         return when (playMode) {
@@ -102,7 +107,10 @@ class AudioRoutingManager(context: Context) {
         }
     }
 
-    /** Duck ringtone and take focus so caller name is audible over the ring. */
+    /**
+     * Silence the ringtone while announcing. On sound mode the ring otherwise buries TTS;
+     * OEMs (especially Samsung) often restore ring volume, so we keep re-applying mute.
+     */
     fun beginIncomingCallAnnouncement() {
         if (incomingCallSessionActive) return
         incomingCallSessionActive = true
@@ -110,20 +118,31 @@ class AudioRoutingManager(context: Context) {
         acquireWakeLock()
 
         try {
-            // Prevent Android from switching the device into an "in-call" audio mode
+            // Prevent Android from switching into an "in-call" audio mode
             // that commonly mutes media/TTS streams.
             if (audioManager.mode != AudioManager.MODE_NORMAL) {
                 audioManager.mode = AudioManager.MODE_NORMAL
             }
-
-            savedRingVolume = audioManager.getStreamVolume(AudioManager.STREAM_RING)
-            val maxRing = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
-            // Duck ring, but keep it audible.
-            val ducked = (maxRing * 0.25f).toInt().coerceAtLeast(1)
-            audioManager.setStreamVolume(AudioManager.STREAM_RING, ducked, 0)
-            Log.i(TAG, "Ducked STREAM_RING from $savedRingVolume to $ducked")
         } catch (e: Exception) {
-            Log.w(TAG, "Could not duck ring volume", e)
+            Log.w(TAG, "Could not set audio mode", e)
+        }
+
+        try {
+            if (savedRingerMode == null) {
+                savedRingerMode = audioManager.ringerMode
+            }
+            if (savedRingVolume == null) {
+                savedRingVolume = audioManager.getStreamVolume(AudioManager.STREAM_RING)
+            }
+            silenceRingtoneForAnnouncement()
+            startRingSilenceKeepAlive()
+            Log.i(
+                TAG,
+                "Silenced ringtone for announcement " +
+                    "(modeWas=$savedRingerMode volWas=$savedRingVolume)",
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not silence ringtone", e)
         }
 
         // USAGE_ALARM often bleeds to the phone speaker even with headphones connected.
@@ -153,19 +172,9 @@ class AudioRoutingManager(context: Context) {
         if (!incomingCallSessionActive) return
         incomingCallSessionActive = false
 
+        stopRingSilenceKeepAlive()
         abandonAudioFocus()
-
-        try {
-            savedRingVolume?.let { previous ->
-                audioManager.setStreamVolume(AudioManager.STREAM_RING, previous, 0)
-                Log.i(TAG, "Restored STREAM_RING to $previous")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not restore ring volume", e)
-        } finally {
-            savedRingVolume = null
-        }
-
+        restoreRingtoneAfterAnnouncement()
         releaseWakeLock()
     }
 
@@ -190,13 +199,113 @@ class AudioRoutingManager(context: Context) {
         releaseWakeLock()
     }
 
+    private fun silenceRingtoneForAnnouncement() {
+        // Mute APIs + volume 0 stop the audible ring so TTS can be heard in sound mode.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                audioManager.adjustStreamVolume(
+                    AudioManager.STREAM_RING,
+                    AudioManager.ADJUST_MUTE,
+                    0,
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "adjustStreamVolume MUTE failed", e)
+            }
+        }
+        try {
+            audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+        } catch (e: Exception) {
+            Log.w(TAG, "setStreamVolume RING 0 failed", e)
+        }
+        // Fallback: NORMAL → VIBRATE so the Phone app stops playing ringtone audio.
+        // Silent/DND already have no ring, so announcement worked there before.
+        try {
+            if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not switch ringer to vibrate", e)
+        }
+    }
+
+    private fun restoreRingtoneAfterAnnouncement() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                audioManager.adjustStreamVolume(
+                    AudioManager.STREAM_RING,
+                    AudioManager.ADJUST_UNMUTE,
+                    0,
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "adjustStreamVolume UNMUTE failed", e)
+        }
+        try {
+            savedRingerMode?.let { mode ->
+                audioManager.ringerMode = mode
+                Log.i(TAG, "Restored ringerMode=$mode")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not restore ringer mode", e)
+        } finally {
+            savedRingerMode = null
+        }
+        try {
+            savedRingVolume?.let { previous ->
+                audioManager.setStreamVolume(AudioManager.STREAM_RING, previous, 0)
+                Log.i(TAG, "Restored STREAM_RING to $previous")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not restore ring volume", e)
+        } finally {
+            savedRingVolume = null
+        }
+    }
+
+    private fun startRingSilenceKeepAlive() {
+        stopRingSilenceKeepAlive()
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!incomingCallSessionActive) return
+                try {
+                    if (audioManager.getStreamVolume(AudioManager.STREAM_RING) > 0) {
+                        audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+                        Log.i(TAG, "Re-applied RING mute (OEM restored volume)")
+                    }
+                    if (
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                        !audioManager.isStreamMute(AudioManager.STREAM_RING)
+                    ) {
+                        audioManager.adjustStreamVolume(
+                            AudioManager.STREAM_RING,
+                            AudioManager.ADJUST_MUTE,
+                            0,
+                        )
+                    }
+                    if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                        audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Ring silence keep-alive failed", e)
+                }
+                mainHandler.postDelayed(this, RING_SILENCE_INTERVAL_MS)
+            }
+        }
+        ringSilenceKeepAlive = runnable
+        mainHandler.postDelayed(runnable, RING_SILENCE_INTERVAL_MS)
+    }
+
+    private fun stopRingSilenceKeepAlive() {
+        ringSilenceKeepAlive?.let { mainHandler.removeCallbacks(it) }
+        ringSilenceKeepAlive = null
+    }
+
     private fun boostAnnouncementStreamVolume() {
         try {
             val stream = AudioManager.STREAM_ALARM
             val max = audioManager.getStreamMaxVolume(stream)
-            // Some OEMs link ring/call routing with the alarm stream.
-            // We set a strong minimum so the caller name is actually audible.
-            val target = (max * 0.65f).toInt().coerceAtLeast(1)
+            // Near-max so caller name cuts through after ringtone is silenced.
+            val target = (max * 0.9f).toInt().coerceAtLeast(1)
             val current = audioManager.getStreamVolume(stream)
             if (current < target) {
                 audioManager.setStreamVolume(stream, target, 0)
@@ -225,8 +334,9 @@ class AudioRoutingManager(context: Context) {
             val attrs = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()
-            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
                 .setAudioAttributes(attrs)
                 .setOnAudioFocusChangeListener { }
                 .build()
@@ -237,7 +347,7 @@ class AudioRoutingManager(context: Context) {
             audioManager.requestAudioFocus(
                 null,
                 AudioManager.STREAM_ALARM,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE,
             ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         }
     }
@@ -344,5 +454,6 @@ class AudioRoutingManager(context: Context) {
 
     companion object {
         private const val TAG = "AudioRoutingManager"
+        private const val RING_SILENCE_INTERVAL_MS = 250L
     }
 }

@@ -138,6 +138,7 @@ class PcmAudioPlayer(private val sampleRate: Int) {
             PlaybackRoute.INCOMING_CALL -> AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()
         }
 
