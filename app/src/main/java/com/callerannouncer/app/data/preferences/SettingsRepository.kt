@@ -61,7 +61,7 @@ class SettingsRepository(private val context: Context) {
             speechRate = prefs[Keys.SPEECH_RATE] ?: 1.0f,
             pitch = prefs[Keys.PITCH] ?: 1.0f,
             smsPrefix = prefs[Keys.SMS_PREFIX] ?: "پیامک از",
-        )
+        ).also { AnnouncePolicyCache.update(context, it) }
     }
 
     suspend fun setCallAnnouncerEnabled(enabled: Boolean) {

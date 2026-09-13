@@ -16,6 +16,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.callerannouncer.app.data.preferences.AnnouncePolicyCache
 import com.callerannouncer.app.domain.model.PlayMode
 
 /**
@@ -110,17 +111,27 @@ class AudioRoutingManager(context: Context) {
      * Ringer mode, audio mode and speakerphone are left untouched: overriding them on
      * One UI routes our TTS into a muted path while the ringtone keeps the speaker.
      */
-    fun beginIncomingCallAnnouncement() {
+    fun beginIncomingCallAnnouncement(useHeadset: Boolean) {
         if (incomingCallSessionActive) return
         incomingCallSessionActive = true
 
         acquireWakeLock()
         duckRingtone(appContext)
         startRingDuckKeepAlive()
-        boostAnnouncementStreamVolume()
+        if (useHeadset) {
+            // Media stream follows the pinned headset; the alarm stream would also
+            // leak onto the phone speaker.
+            boostMediaVolumeIfSilent()
+        } else {
+            boostAnnouncementStreamVolume()
+        }
         logAudioState("begin")
-        val granted = requestExclusiveAudioFocus()
-        Log.i(TAG, "Announcement focus granted=$granted")
+        val granted = if (useHeadset) {
+            requestTransientAudioFocus()
+        } else {
+            requestExclusiveAudioFocus()
+        }
+        Log.i(TAG, "Announcement focus granted=$granted useHeadset=$useHeadset")
     }
 
     fun endIncomingCallAnnouncement() {
@@ -373,6 +384,25 @@ class AudioRoutingManager(context: Context) {
             } catch (e: Exception) {
                 Log.w(TAG, "duckRingtone failed", e)
             }
+        }
+
+        /**
+         * Duck only when this call will actually be announced. In headphones-only mode
+         * without a headset the phone must ring at its normal volume.
+         */
+        @JvmStatic
+        fun duckRingtoneIfAnnouncing(context: Context) {
+            val appContext = context.applicationContext
+            val policy = AnnouncePolicyCache.read(appContext)
+            if (!policy.callEnabled) {
+                Log.i(TAG, "Not ducking ring — call announcer disabled")
+                return
+            }
+            if (!AudioRoutingManager(appContext).shouldAnnounce(policy.playMode)) {
+                Log.i(TAG, "Not ducking ring — playMode=${policy.playMode} blocks announcement")
+                return
+            }
+            duckRingtone(appContext)
         }
 
         /** Restore the ring volume captured before the first duck of this call. */

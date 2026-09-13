@@ -220,25 +220,23 @@ class AnnouncerService : Service() {
             isSpeaking = true
             registerStopControls()
             refreshNotification(speaking = true)
+            // A connected headset owns the announcement so it is not duplicated on the
+            // phone speaker; without one, calls fall back to the alarm-stream route.
+            val headsetDevice = audioRoutingManager.beginExclusiveHeadsetOutput()
             if (forIncomingCall) {
                 isAnnouncingIncomingCall = true
-                audioRoutingManager.beginIncomingCallAnnouncement()
+                audioRoutingManager.beginIncomingCallAnnouncement(
+                    useHeadset = headsetDevice != null,
+                )
             } else {
                 val focusOk = audioRoutingManager.requestFocusAndRoute()
                 if (!focusOk) {
                     Log.w(TAG, "Audio focus denied — continuing anyway")
                 }
             }
-            // For calls let the platform route the alarm stream; pinning a device while
-            // telephony owns the speaker ends up playing into a muted path on One UI.
-            val headsetDevice = if (forIncomingCall) {
-                null
-            } else {
-                audioRoutingManager.beginExclusiveHeadsetOutput()
-            }
             try {
                 ttsManager.setSpeechParams(rate, pitch)
-                val route = if (forIncomingCall) {
+                val route = if (forIncomingCall && headsetDevice == null) {
                     PlaybackRoute.INCOMING_CALL
                 } else {
                     PlaybackRoute.MEDIA
@@ -256,9 +254,7 @@ class AnnouncerService : Service() {
                 )
                 spoken
             } finally {
-                if (!forIncomingCall) {
-                    audioRoutingManager.endExclusiveHeadsetOutput()
-                }
+                audioRoutingManager.endExclusiveHeadsetOutput()
                 if (forIncomingCall) {
                     isAnnouncingIncomingCall = false
                     audioRoutingManager.endIncomingCallAnnouncement()
