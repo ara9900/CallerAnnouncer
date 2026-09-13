@@ -68,8 +68,26 @@ class AudioRoutingManager(context: Context) {
             AudioDeviceInfo.TYPE_HEARING_AID,
         )
         return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            .filter { it.type in headsetTypes }
+            .filter { it.type in headsetTypes && isUsableOutput(it) }
             .minByOrNull { headsetDevicePriority(it.type) }
+    }
+
+    /**
+     * A paired laptop or car kit shows up as a Bluetooth SCO output even when nothing is
+     * listening on it. Pinning playback there silently fails and the platform falls back
+     * to the loudspeaker, so only trust SCO while a call-audio link is actually up.
+     */
+    private fun isUsableOutput(device: AudioDeviceInfo): Boolean {
+        if (device.type != AudioDeviceInfo.TYPE_BLUETOOTH_SCO) return true
+        val scoActive = try {
+            audioManager.isBluetoothScoOn
+        } catch (_: Exception) {
+            false
+        }
+        if (!scoActive) {
+            Log.i(TAG, "Ignoring idle SCO output ${device.productName}")
+        }
+        return scoActive
     }
 
     /**

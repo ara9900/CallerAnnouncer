@@ -45,21 +45,12 @@ class OnlineEdgeTtsEngine(context: Context) {
                 val mp3 = audioFor(text)
                 if (mp3.isEmpty() || player.isStopped()) return@withContext false
                 Log.i(TAG, "audio ready in ${System.currentTimeMillis() - startedAt}ms")
-                repeat(times) { index ->
-                    if (index > 0) {
-                        Thread.sleep(REPEAT_GAP_MS)
-                        if (player.isStopped()) {
-                            Log.i(TAG, "Online speak cancelled before repeat $index")
-                            return@withContext false
-                        }
-                    }
-                    val played = player.play(mp3, route, outputDevice)
-                    if (!played || player.isStopped()) {
-                        Log.i(TAG, "Online repeat ${index + 1}/$times stopped (played=$played)")
-                        return@withContext false
-                    }
-                }
-                true
+                player.play(
+                    mp3Data = mp3,
+                    route = route,
+                    outputDevice = outputDevice,
+                    repeatCount = times,
+                )
             } catch (e: Exception) {
                 Log.e(TAG, "Online speak failed", e)
                 false
@@ -111,6 +102,5 @@ class OnlineEdgeTtsEngine(context: Context) {
 
     companion object {
         private const val TAG = "OnlineEdgeTts"
-        private const val REPEAT_GAP_MS = 250L
     }
 }
