@@ -8,6 +8,7 @@ import android.os.Looper
 import android.telephony.TelephonyManager
 import android.util.Log
 import com.callerannouncer.app.service.AnnouncerService
+import com.callerannouncer.app.service.AudioRoutingManager
 import com.callerannouncer.app.util.ContactHelper
 import java.util.concurrent.atomic.AtomicLong
 
@@ -34,6 +35,9 @@ class PhoneCallReceiver : BroadcastReceiver() {
     }
 
     private fun handleRinging(context: Context, intent: Intent) {
+        // Mute ring immediately — waiting for the service is too late on Samsung.
+        AudioRoutingManager.silenceRingtoneNow(context.applicationContext)
+
         val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER).orEmpty()
         pendingAnnounceRunnable?.let { handler.removeCallbacks(it) }
         pendingAnnounceRunnable = null
@@ -59,6 +63,7 @@ class PhoneCallReceiver : BroadcastReceiver() {
             return
         }
 
+        AudioRoutingManager.silenceRingtoneNow(context)
         val displayName = ContactHelper.resolveDisplayName(context, number)
 
         Log.i(TAG, "Incoming call from=$number name=$displayName")

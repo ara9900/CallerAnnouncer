@@ -229,11 +229,14 @@ class AnnouncerService : Service() {
                     Log.w(TAG, "Audio focus denied — continuing anyway")
                 }
             }
-            val headsetDevice = audioRoutingManager.beginExclusiveHeadsetOutput()
+            // Pin call TTS to the phone loudspeaker — never to BT/watch during ring.
+            val headsetDevice = if (forIncomingCall) {
+                audioRoutingManager.findBuiltinSpeakerDevice()
+            } else {
+                audioRoutingManager.beginExclusiveHeadsetOutput()
+            }
             try {
                 ttsManager.setSpeechParams(rate, pitch)
-                // Incoming call must NEVER use MEDIA — OEMs duck/mute media during ringtone.
-                // Prefer INCOMING_CALL attributes even when a headset is connected.
                 val route = if (forIncomingCall) {
                     PlaybackRoute.INCOMING_CALL
                 } else {
@@ -252,7 +255,9 @@ class AnnouncerService : Service() {
                 )
                 spoken
             } finally {
-                audioRoutingManager.endExclusiveHeadsetOutput()
+                if (!forIncomingCall) {
+                    audioRoutingManager.endExclusiveHeadsetOutput()
+                }
                 if (forIncomingCall) {
                     isAnnouncingIncomingCall = false
                     audioRoutingManager.endIncomingCallAnnouncement()

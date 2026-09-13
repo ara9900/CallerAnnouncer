@@ -75,11 +75,11 @@ class AudioRoutingManager(context: Context) {
             .minByOrNull { headsetDevicePriority(it.type) }
     }
 
-    /**
-     * Pins playback to the connected headset/Bluetooth device and disables speakerphone
-     * so TTS is not duplicated on the phone speaker.
-     */
-    fun beginExclusiveHeadsetOutput(): AudioDeviceInfo? {
+    /** Built-in loudspeaker device, if exposed by the OEM. */
+    fun findBuiltinSpeakerDevice(): AudioDeviceInfo? {
+        return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+    }
         val device = findHeadsetOutputDevice() ?: return null
         try {
             if (savedSpeakerphoneOn == null) {
@@ -244,9 +244,8 @@ class AudioRoutingManager(context: Context) {
         }
     }
 
-    /** Route announcement to the loudspeaker when no headset is pinned. */
+    /** Route announcement to the loudspeaker — ignore BT so ring/TTS share the same output. */
     private fun forceSpeakerForCallAnnouncement() {
-        if (isHeadsetOrBluetoothConnected()) return
         try {
             if (savedSpeakerphoneOn == null) {
                 savedSpeakerphoneOn = audioManager.isSpeakerphoneOn
@@ -255,6 +254,8 @@ class AudioRoutingManager(context: Context) {
                 audioManager.isSpeakerphoneOn = true
                 forcedSpeakerphoneForCall = true
                 Log.i(TAG, "Forced speakerphone ON for call announcement")
+            } else {
+                forcedSpeakerphoneForCall = true
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not force speakerphone", e)
@@ -268,10 +269,7 @@ class AudioRoutingManager(context: Context) {
                     audioManager.isSpeakerphoneOn = previous
                     Log.i(TAG, "Restored speakerphone=$previous after call announcement")
                 }
-                // Only clear if exclusive-headset path did not own this snapshot.
-                if (!isHeadsetOrBluetoothConnected()) {
-                    savedSpeakerphoneOn = null
-                }
+                savedSpeakerphoneOn = null
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not restore speakerphone", e)
@@ -418,7 +416,7 @@ class AudioRoutingManager(context: Context) {
     private fun requestExclusiveAudioFocus(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()
@@ -541,5 +539,52 @@ class AudioRoutingManager(context: Context) {
     companion object {
         private const val TAG = "AudioRoutingManager"
         private const val RING_SILENCE_INTERVAL_MS = 250L
+
+        /**
+         * Best-effort ringtone mute callable from the phone-state receiver before the
+         * service starts — critical on Samsung where the ring is already loud by then.
+         */
+        @JvmStatic
+        fun silenceRingtoneNow(context: Context) {
+            try {
+                val audioManager =
+                    context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    try {
+                        audioManager.adjustStreamVolume(
+                            AudioManager.STREAM_RING,
+                            AudioManager.ADJUST_MUTE,
+                            0,
+                        )
+                    } catch (_: Exception) {
+                    }
+                }
+                try {
+                    audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+                    audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
+                } catch (_: Exception) {
+                }
+                try {
+                    if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                        audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
+                    }
+                } catch (_: Exception) {
+                    try {
+                        if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                            audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+                try {
+                    audioManager.mode = AudioManager.MODE_NORMAL
+                    audioManager.isSpeakerphoneOn = true
+                } catch (_: Exception) {
+                }
+                Log.i(TAG, "silenceRingtoneNow applied (early)")
+            } catch (e: Exception) {
+                Log.w(TAG, "silenceRingtoneNow failed", e)
+            }
+        }
     }
 }
