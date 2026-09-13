@@ -136,9 +136,6 @@ class AudioRoutingManager(context: Context) {
         }
 
         try {
-            if (savedRingerMode == null) {
-                savedRingerMode = audioManager.ringerMode
-            }
             if (savedRingVolume == null) {
                 savedRingVolume = audioManager.getStreamVolume(AudioManager.STREAM_RING)
             }
@@ -146,17 +143,15 @@ class AudioRoutingManager(context: Context) {
                 savedNotificationVolume =
                     audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
             }
-            silenceRingtoneForAnnouncement()
+            duckRingtoneForAnnouncement()
             forceSpeakerForCallAnnouncement()
-            startRingSilenceKeepAlive()
+            startRingDuckKeepAlive()
             Log.i(
                 TAG,
-                "Silenced ringtone for announcement " +
-                    "(modeWas=$savedRingerMode volWas=$savedRingVolume " +
-                    "headset=${isHeadsetOrBluetoothConnected()})",
+                "Ducked ringtone for announcement (volWas=$savedRingVolume) — ringer mode unchanged",
             )
         } catch (e: Exception) {
-            Log.w(TAG, "Could not silence ringtone", e)
+            Log.w(TAG, "Could not duck ringtone", e)
         }
 
         // Navigation-guidance usage maps to media stream on many OEMs — keep it loud.
@@ -178,7 +173,7 @@ class AudioRoutingManager(context: Context) {
         if (!incomingCallSessionActive) return
         incomingCallSessionActive = false
 
-        stopRingSilenceKeepAlive()
+        stopRingDuckKeepAlive()
         abandonAudioFocus()
         restoreRingtoneAfterAnnouncement()
         releaseWakeLock()
@@ -205,48 +200,20 @@ class AudioRoutingManager(context: Context) {
         releaseWakeLock()
     }
 
-    private fun silenceRingtoneForAnnouncement() {
-        // Mute APIs + volume 0 stop the audible ring so TTS can be heard in sound mode.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            try {
-                audioManager.adjustStreamVolume(
-                    AudioManager.STREAM_RING,
-                    AudioManager.ADJUST_MUTE,
-                    0,
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "adjustStreamVolume MUTE RING failed", e)
-            }
-            try {
-                audioManager.adjustStreamVolume(
-                    AudioManager.STREAM_NOTIFICATION,
-                    AudioManager.ADJUST_MUTE,
-                    0,
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "adjustStreamVolume MUTE NOTIFICATION failed", e)
-            }
-        }
+    /**
+     * Lower ring volume only — never change ringer mode (sound / vibrate / silent).
+     * Switching to vibrate was audible for TTS but a bad UX.
+     */
+    private fun duckRingtoneForAnnouncement() {
         try {
-            audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+            val maxRing = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
+            // Soft duck so TTS is clear; keep a tiny residual ring if possible.
+            val ducked = (maxRing * 0.12f).toInt().coerceAtLeast(0)
+            audioManager.setStreamVolume(AudioManager.STREAM_RING, ducked, 0)
             audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
+            Log.i(TAG, "Ducked STREAM_RING to $ducked (ringerMode left alone)")
         } catch (e: Exception) {
-            Log.w(TAG, "setStreamVolume RING/NOTIFICATION 0 failed", e)
-        }
-        // SILENT stops ringtone audio more reliably than VIBRATE on Samsung.
-        try {
-            if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not switch ringer to silent — trying vibrate", e)
-            try {
-                if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                    audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
-                }
-            } catch (e2: Exception) {
-                Log.w(TAG, "Could not switch ringer to vibrate", e2)
-            }
+            Log.w(TAG, "setStreamVolume RING duck failed", e)
         }
     }
 
@@ -283,32 +250,6 @@ class AudioRoutingManager(context: Context) {
             forcedSpeakerphoneForCall = false
         }
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                audioManager.adjustStreamVolume(
-                    AudioManager.STREAM_RING,
-                    AudioManager.ADJUST_UNMUTE,
-                    0,
-                )
-                audioManager.adjustStreamVolume(
-                    AudioManager.STREAM_NOTIFICATION,
-                    AudioManager.ADJUST_UNMUTE,
-                    0,
-                )
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "adjustStreamVolume UNMUTE failed", e)
-        }
-        try {
-            savedRingerMode?.let { mode ->
-                audioManager.ringerMode = mode
-                Log.i(TAG, "Restored ringerMode=$mode")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not restore ringer mode", e)
-        } finally {
-            savedRingerMode = null
-        }
-        try {
             savedRingVolume?.let { previous ->
                 audioManager.setStreamVolume(AudioManager.STREAM_RING, previous, 0)
                 Log.i(TAG, "Restored STREAM_RING to $previous")
@@ -328,10 +269,12 @@ class AudioRoutingManager(context: Context) {
         } finally {
             savedNotificationVolume = null
         }
+        // Clear legacy field if an older session set it — never leave phone in vibrate.
+        savedRingerMode = null
     }
 
-    private fun startRingSilenceKeepAlive() {
-        stopRingSilenceKeepAlive()
+    private fun startRingDuckKeepAlive() {
+        stopRingDuckKeepAlive()
         val runnable = object : Runnable {
             override fun run() {
                 if (!incomingCallSessionActive) return
@@ -339,31 +282,21 @@ class AudioRoutingManager(context: Context) {
                     if (audioManager.mode != AudioManager.MODE_NORMAL) {
                         audioManager.mode = AudioManager.MODE_NORMAL
                     }
-                    if (audioManager.getStreamVolume(AudioManager.STREAM_RING) > 0) {
-                        audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
-                        Log.i(TAG, "Re-applied RING mute (OEM restored volume)")
+                    val maxRing = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
+                    val ducked = (maxRing * 0.12f).toInt().coerceAtLeast(0)
+                    val current = audioManager.getStreamVolume(AudioManager.STREAM_RING)
+                    if (current > ducked) {
+                        audioManager.setStreamVolume(AudioManager.STREAM_RING, ducked, 0)
+                        Log.i(TAG, "Re-applied RING duck (OEM restored volume)")
                     }
                     if (audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION) > 0) {
                         audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
-                    }
-                    if (
-                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                        !audioManager.isStreamMute(AudioManager.STREAM_RING)
-                    ) {
-                        audioManager.adjustStreamVolume(
-                            AudioManager.STREAM_RING,
-                            AudioManager.ADJUST_MUTE,
-                            0,
-                        )
-                    }
-                    if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                        audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
                     }
                     if (forcedSpeakerphoneForCall && !audioManager.isSpeakerphoneOn) {
                         audioManager.isSpeakerphoneOn = true
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Ring silence keep-alive failed", e)
+                    Log.w(TAG, "Ring duck keep-alive failed", e)
                 }
                 mainHandler.postDelayed(this, RING_SILENCE_INTERVAL_MS)
             }
@@ -372,7 +305,7 @@ class AudioRoutingManager(context: Context) {
         mainHandler.postDelayed(runnable, RING_SILENCE_INTERVAL_MS)
     }
 
-    private fun stopRingSilenceKeepAlive() {
+    private fun stopRingDuckKeepAlive() {
         ringSilenceKeepAlive?.let { mainHandler.removeCallbacks(it) }
         ringSilenceKeepAlive = null
     }
@@ -547,47 +480,26 @@ class AudioRoutingManager(context: Context) {
         private const val RING_SILENCE_INTERVAL_MS = 250L
 
         /**
-         * Best-effort ringtone mute callable from the phone-state receiver before the
-         * service starts — critical on Samsung where the ring is already loud by then.
+         * Early ring duck from the phone-state receiver — volume only, never ringer mode.
          */
         @JvmStatic
         fun silenceRingtoneNow(context: Context) {
             try {
                 val audioManager =
                     context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    try {
-                        audioManager.adjustStreamVolume(
-                            AudioManager.STREAM_RING,
-                            AudioManager.ADJUST_MUTE,
-                            0,
-                        )
-                    } catch (_: Exception) {
-                    }
-                }
                 try {
-                    audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+                    val maxRing = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
+                    val ducked = (maxRing * 0.12f).toInt().coerceAtLeast(0)
+                    audioManager.setStreamVolume(AudioManager.STREAM_RING, ducked, 0)
                     audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
                 } catch (_: Exception) {
-                }
-                try {
-                    if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                        audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
-                    }
-                } catch (_: Exception) {
-                    try {
-                        if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                            audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
-                        }
-                    } catch (_: Exception) {
-                    }
                 }
                 try {
                     audioManager.mode = AudioManager.MODE_NORMAL
                     audioManager.isSpeakerphoneOn = true
                 } catch (_: Exception) {
                 }
-                Log.i(TAG, "silenceRingtoneNow applied (early)")
+                Log.i(TAG, "silenceRingtoneNow ducked volume only (ringer mode unchanged)")
             } catch (e: Exception) {
                 Log.w(TAG, "silenceRingtoneNow failed", e)
             }
