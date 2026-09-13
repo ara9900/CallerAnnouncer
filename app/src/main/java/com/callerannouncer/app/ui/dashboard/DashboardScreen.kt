@@ -92,6 +92,7 @@ fun DashboardScreen(
                     if (serviceRunning) viewModel.stopService() else viewModel.startService()
                 },
                 onTestVoice = viewModel::testVoice,
+                onStopAnnouncement = viewModel::stopAnnouncement,
                 modifier = Modifier
                     .graphicsLayer { translationY = heroOffset }
                     .alpha(heroAlpha),

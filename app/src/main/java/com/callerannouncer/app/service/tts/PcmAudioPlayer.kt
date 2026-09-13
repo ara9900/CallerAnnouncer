@@ -96,16 +96,24 @@ class PcmAudioPlayer(private val sampleRate: Int) {
 
     fun stop() {
         stopped = true
-        track?.pause()
-        track?.flush()
+        val audioTrack = track
+        track = null
+        activeRoute = null
+        activeOutputDevice = null
+        try {
+            audioTrack?.pause()
+            audioTrack?.flush()
+            audioTrack?.stop()
+        } catch (_: Exception) {
+        }
+        try {
+            audioTrack?.release()
+        } catch (_: Exception) {
+        }
     }
 
     fun release() {
         stop()
-        track?.release()
-        track = null
-        activeRoute = null
-        activeOutputDevice = null
     }
 
     private fun createTrack(

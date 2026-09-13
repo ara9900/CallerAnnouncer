@@ -7,19 +7,25 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import android.view.KeyEvent
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.callerannouncer.app.MainActivity
 import com.callerannouncer.app.R
 import com.callerannouncer.app.data.preferences.SettingsRepository
 import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.domain.model.PlayMode
 import com.callerannouncer.app.domain.model.TtsEngineMode
+import com.callerannouncer.app.receiver.AnnouncementStopReceiver
 import com.callerannouncer.app.service.tts.PlaybackRoute
 import com.callerannouncer.app.service.tts.TtsModelManager
 import kotlinx.coroutines.CoroutineScope
@@ -40,7 +46,12 @@ class AnnouncerService : Service() {
     private lateinit var ttsManager: TtsManager
     private lateinit var audioRoutingManager: AudioRoutingManager
     private val speakMutex = Mutex()
-    private var activeCallAnnounceJob: Job? = null
+    private var activeSpeakJob: Job? = null
+    private var mediaSession: MediaSession? = null
+    private var stopControlsRegistered = false
+
+    private val volumeStopReceiver = AnnouncementStopReceiver()
+    private val mediaButtonReceiver = AnnouncementStopReceiver()
 
     override fun onCreate() {
         super.onCreate()
@@ -68,27 +79,43 @@ class AnnouncerService : Service() {
             ACTION_ANNOUNCE_CALL -> {
                 val name = intent.getStringExtra(EXTRA_DISPLAY_NAME).orEmpty()
                 val number = intent.getStringExtra(EXTRA_PHONE_NUMBER).orEmpty()
-                activeCallAnnounceJob?.cancel()
-                activeCallAnnounceJob = scope.launch {
+                startSpeakJob {
                     announceCall(name.ifBlank { number.ifBlank { "ناشناس" } })
                 }
             }
             ACTION_ANNOUNCE_SMS -> {
                 val sender = intent.getStringExtra(EXTRA_DISPLAY_NAME).orEmpty()
                 val body = intent.getStringExtra(EXTRA_SMS_BODY).orEmpty()
-                scope.launch { announceSms(sender.ifBlank { "ناشناس" }, body) }
+                startSpeakJob {
+                    announceSms(sender.ifBlank { "ناشناس" }, body)
+                }
             }
             ACTION_TEST_VOICE -> {
-                scope.launch { announceTest() }
+                startSpeakJob { announceTest() }
             }
-            ACTION_STOP_CALL_ANNOUNCEMENT -> {
-                stopActiveCallAnnouncement()
+            ACTION_STOP_CALL_ANNOUNCEMENT,
+            ACTION_STOP_ANNOUNCEMENT -> {
+                stopAnnouncementInternal(reason = intent.action.orEmpty())
             }
             ACTION_STOP -> {
+                stopAnnouncementInternal(reason = ACTION_STOP)
                 stopSelf()
             }
         }
         return START_STICKY
+    }
+
+    private fun startSpeakJob(block: suspend () -> Unit) {
+        activeSpeakJob?.cancel()
+        activeSpeakJob = scope.launch {
+            try {
+                block()
+            } finally {
+                if (activeSpeakJob === this) {
+                    activeSpeakJob = null
+                }
+            }
+        }
     }
 
     private suspend fun announceCall(displayName: String) {
@@ -190,6 +217,9 @@ class AnnouncerService : Service() {
                 Log.e(TAG, "Offline TTS model not ready")
                 return@withLock false
             }
+            isSpeaking = true
+            registerStopControls()
+            refreshNotification(speaking = true)
             if (forIncomingCall) {
                 isAnnouncingIncomingCall = true
                 audioRoutingManager.beginIncomingCallAnnouncement()
@@ -227,23 +257,135 @@ class AnnouncerService : Service() {
                 } else {
                     audioRoutingManager.release()
                 }
+                isSpeaking = false
+                unregisterStopControls()
+                refreshNotification(speaking = false)
             }
         }
     }
 
-    private fun stopActiveCallAnnouncement() {
-        activeCallAnnounceJob?.cancel()
-        activeCallAnnounceJob = null
-        if (!isAnnouncingIncomingCall) return
-        Log.i(TAG, "Stopping active call announcement")
-        isAnnouncingIncomingCall = false
+    private fun stopAnnouncementInternal(reason: String) {
+        Log.i(TAG, "Stopping announcement reason=$reason speaking=$isSpeaking")
+        activeSpeakJob?.cancel()
+        activeSpeakJob = null
         ttsManager.stop()
-        audioRoutingManager.endIncomingCallAnnouncement()
+        if (isAnnouncingIncomingCall) {
+            isAnnouncingIncomingCall = false
+            audioRoutingManager.endIncomingCallAnnouncement()
+        } else {
+            audioRoutingManager.release()
+        }
+        isSpeaking = false
+        unregisterStopControls()
+        refreshNotification(speaking = false)
+    }
+
+    private fun registerStopControls() {
+        if (stopControlsRegistered) return
+        stopControlsRegistered = true
+        try {
+            ContextCompat.registerReceiver(
+                this,
+                volumeStopReceiver,
+                IntentFilter(AnnouncementStopReceiver.VOLUME_CHANGED_ACTION),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Volume receiver register failed", e)
+        }
+        try {
+            ContextCompat.registerReceiver(
+                this,
+                mediaButtonReceiver,
+                IntentFilter(Intent.ACTION_MEDIA_BUTTON),
+                ContextCompat.RECEIVER_EXPORTED,
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Media button receiver register failed", e)
+        }
+        try {
+            mediaSession?.release()
+            mediaSession = MediaSession(this, "CallerAnnouncer").apply {
+                setCallback(object : MediaSession.Callback() {
+                    override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
+                        val event = mediaButtonIntent.getParcelableExtraCompatKey()
+                        if (event?.action == KeyEvent.ACTION_DOWN) {
+                            when (event.keyCode) {
+                                KeyEvent.KEYCODE_HEADSETHOOK,
+                                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                                KeyEvent.KEYCODE_MEDIA_PAUSE,
+                                KeyEvent.KEYCODE_MEDIA_STOP,
+                                -> {
+                                    stopAnnouncementInternal("media_session")
+                                    return true
+                                }
+                            }
+                        }
+                        return super.onMediaButtonEvent(mediaButtonIntent)
+                    }
+
+                    override fun onPause() {
+                        stopAnnouncementInternal("media_pause")
+                    }
+
+                    override fun onStop() {
+                        stopAnnouncementInternal("media_stop")
+                    }
+
+                    override fun onPlay() {
+                        // Ignore — headset middle button often sends play/pause together.
+                        stopAnnouncementInternal("media_play")
+                    }
+                })
+                setPlaybackState(
+                    PlaybackState.Builder()
+                        .setActions(
+                            PlaybackState.ACTION_PAUSE or
+                                PlaybackState.ACTION_STOP or
+                                PlaybackState.ACTION_PLAY_PAUSE or
+                                PlaybackState.ACTION_PLAY
+                        )
+                        .setState(PlaybackState.STATE_PLAYING, 0L, 1f)
+                        .build()
+                )
+                isActive = true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MediaSession setup failed", e)
+        }
+    }
+
+    private fun unregisterStopControls() {
+        if (!stopControlsRegistered) return
+        stopControlsRegistered = false
+        try {
+            unregisterReceiver(volumeStopReceiver)
+        } catch (_: Exception) {
+        }
+        try {
+            unregisterReceiver(mediaButtonReceiver)
+        } catch (_: Exception) {
+        }
+        try {
+            mediaSession?.isActive = false
+            mediaSession?.release()
+        } catch (_: Exception) {
+        }
+        mediaSession = null
+    }
+
+    @Suppress("DEPRECATION")
+    private fun Intent.getParcelableExtraCompatKey(): KeyEvent? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+        } else {
+            getParcelableExtra(Intent.EXTRA_KEY_EVENT) as? KeyEvent
+        }
     }
 
     private fun startInForeground() {
         ensureChannel()
-        val notification = buildNotification()
+        val notification = buildNotification(speaking = false)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             ServiceCompat.startForeground(
                 this,
@@ -254,6 +396,11 @@ class AnnouncerService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+    }
+
+    private fun refreshNotification(speaking: Boolean) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, buildNotification(speaking))
     }
 
     private fun ensureChannel() {
@@ -270,19 +417,33 @@ class AnnouncerService : Service() {
         manager.createNotificationChannel(channel)
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(speaking: Boolean): Notification {
         val openIntent = PendingIntent.getActivity(
             this,
             0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val stopIntent = PendingIntent.getService(
+            this,
+            1,
+            Intent(this, AnnouncerService::class.java).apply {
+                action = ACTION_STOP_ANNOUNCEMENT
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val text = if (speaking) {
+            "در حال اعلام — برای قطع، دکمه را بزنید یا ولوم را کم کنید"
+        } else {
+            "سرویس اعلام تماس و پیامک فعال است"
+        }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
-            .setContentText("سرویس اعلام تماس و پیامک فعال است")
+            .setContentText(text)
             .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
             .setContentIntent(openIntent)
+            .addAction(0, "قطع اعلام", stopIntent)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
@@ -291,6 +452,8 @@ class AnnouncerService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        isSpeaking = false
+        unregisterStopControls()
         ttsManager.shutdown()
         audioRoutingManager.release()
         scope.cancel()
@@ -307,6 +470,8 @@ class AnnouncerService : Service() {
         const val ACTION_TEST_VOICE = "com.callerannouncer.app.ACTION_TEST_VOICE"
         const val ACTION_STOP_CALL_ANNOUNCEMENT =
             "com.callerannouncer.app.ACTION_STOP_CALL_ANNOUNCEMENT"
+        const val ACTION_STOP_ANNOUNCEMENT =
+            "com.callerannouncer.app.ACTION_STOP_ANNOUNCEMENT"
         const val ACTION_STOP = "com.callerannouncer.app.ACTION_STOP"
 
         const val EXTRA_DISPLAY_NAME = "extra_display_name"
@@ -315,6 +480,10 @@ class AnnouncerService : Service() {
 
         @Volatile
         var isRunning: Boolean = false
+            private set
+
+        @Volatile
+        var isSpeaking: Boolean = false
             private set
 
         @Volatile
@@ -368,6 +537,13 @@ class AnnouncerService : Service() {
         fun stopCallAnnouncement(context: Context) {
             val intent = Intent(context, AnnouncerService::class.java).apply {
                 action = ACTION_STOP_CALL_ANNOUNCEMENT
+            }
+            context.startService(intent)
+        }
+
+        fun stopAnnouncement(context: Context) {
+            val intent = Intent(context, AnnouncerService::class.java).apply {
+                action = ACTION_STOP_ANNOUNCEMENT
             }
             context.startService(intent)
         }

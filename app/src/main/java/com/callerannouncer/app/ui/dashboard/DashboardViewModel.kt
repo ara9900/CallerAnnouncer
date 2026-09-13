@@ -71,4 +71,9 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         AnnouncerService.testVoice(getApplication())
         refresh()
     }
+
+    fun stopAnnouncement() {
+        AnnouncerService.stopAnnouncement(getApplication())
+        refresh()
+    }
 }

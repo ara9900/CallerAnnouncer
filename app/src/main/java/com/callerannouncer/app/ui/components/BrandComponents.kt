@@ -89,6 +89,7 @@ fun ServiceHero(
     running: Boolean,
     onToggleService: () -> Unit,
     onTestVoice: () -> Unit,
+    onStopAnnouncement: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val pulse = rememberInfiniteTransition(label = "pulse")
@@ -225,7 +226,7 @@ fun ServiceHero(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = if (running) "توقف" else "شروع سرویس",
+                        text = if (running) "توقف سرویس" else "شروع سرویس",
                         style = MaterialTheme.typography.labelLarge,
                     )
                 }
@@ -242,6 +243,26 @@ fun ServiceHero(
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("آزمایش صدا", style = MaterialTheme.typography.labelLarge)
                 }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            OutlinedButton(
+                onClick = onStopAnnouncement,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+                shape = ControlShape,
+                border = BorderStroke(1.dp, onSurface.copy(alpha = 0.45f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = onSurface),
+            ) {
+                Icon(Icons.Rounded.Stop, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "قطع اعلام",
+                    style = MaterialTheme.typography.labelLarge,
+                    textAlign = TextAlign.Center,
+                )
             }
         }
     }
