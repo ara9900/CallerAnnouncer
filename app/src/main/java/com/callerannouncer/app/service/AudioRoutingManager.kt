@@ -263,7 +263,7 @@ class AudioRoutingManager(context: Context) {
             val attrs = AudioAttributes.Builder()
                 .apply {
                     if (useHeadset) {
-                        setUsage(AudioAttributes.USAGE_MEDIA)
+                        setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
                     } else {
                         setUsage(AudioAttributes.USAGE_ALARM)
                         setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)

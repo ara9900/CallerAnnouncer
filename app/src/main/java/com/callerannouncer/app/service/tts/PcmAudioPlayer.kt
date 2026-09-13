@@ -147,6 +147,10 @@ class PcmAudioPlayer(private val sampleRate: Int) {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()
+            PlaybackRoute.HEADSET_CALL -> AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
         }
 
         val format = AudioFormat.Builder()

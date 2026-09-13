@@ -243,10 +243,10 @@ class AnnouncerService : Service() {
             }
             try {
                 ttsManager.setSpeechParams(rate, pitch)
-                val route = if (forIncomingCall && headsetDevice == null) {
-                    PlaybackRoute.INCOMING_CALL
-                } else {
-                    PlaybackRoute.MEDIA
+                val route = when {
+                    !forIncomingCall -> PlaybackRoute.MEDIA
+                    headsetDevice != null -> PlaybackRoute.HEADSET_CALL
+                    else -> PlaybackRoute.INCOMING_CALL
                 }
                 val spoken = ttsManager.speakAndAwait(
                     text = text,
