@@ -159,7 +159,7 @@ class AnnouncerService : Service() {
                         !TtsModelManager.isModelReady(applicationContext) ->
                         "مدل صدای فارسی هنوز آماده نیست — اینترنت را چک کنید و صبر کنید"
                     settings.ttsEngineMode == TtsEngineMode.ONLINE_EDGE ->
-                        "پخش آنلاین ناموفق بود — اینترنت را بررسی کنید"
+                        "پخش آنلاین ناموفق بود — اینترنت/VPN را بررسی کنید (در تماس‌ها به آفلاین برمی‌گردد)"
                     else -> "پخش صدا ناموفق بود — اپ را ببندید و دوباره باز کنید"
                 },
                 Toast.LENGTH_LONG,
