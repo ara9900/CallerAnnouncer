@@ -76,12 +76,10 @@ class EdgeTtsClient {
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", USER_AGENT)
-            .header("Accept-Encoding", "gzip, deflate, br")
             .header("Accept-Language", "en-US,en;q=0.9")
             .header("Pragma", "no-cache")
             .header("Cache-Control", "no-cache")
             .header("Origin", ORIGIN)
-            .header("Sec-WebSocket-Version", "13")
             .header("Cookie", "muid=${generateMuid()};")
             .build()
 
@@ -101,6 +99,11 @@ class EdgeTtsClient {
 
         fun completeError(error: Throwable) {
             if (finished) return
+            // Audio already buffered but socket closed abruptly — still usable.
+            if (audioBuffer.size() > 0) {
+                completeSuccess(audioBuffer.toByteArray())
+                return
+            }
             finished = true
             continuation.resumeWithException(error)
         }
@@ -123,8 +126,8 @@ class EdgeTtsClient {
                     val path = parseTextPath(text)
                     when (path) {
                         "turn.end" -> {
-                            webSocket.close(1000, "done")
                             completeSuccess(audioBuffer.toByteArray())
+                            webSocket.cancel()
                         }
                         "response", "turn.start", "audio.metadata" -> Unit
                         else -> Log.w(TAG, "Edge TTS text path=$path body=${text.take(200)}")
@@ -155,6 +158,11 @@ class EdgeTtsClient {
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    if (finished || audioBuffer.size() > 0) {
+                        Log.i(TAG, "Edge TTS socket closed after audio (${audioBuffer.size()} bytes)")
+                        completeError(t)
+                        return
+                    }
                     val details = response?.let { "HTTP ${it.code} ${it.message}" } ?: "no response"
                     Log.e(TAG, "Edge TTS WebSocket failed $details", t)
                     completeError(IllegalStateException("Edge TTS connection failed ($details)", t))
