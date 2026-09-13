@@ -136,7 +136,9 @@ class PcmAudioPlayer(private val sampleRate: Int) {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build()
             PlaybackRoute.INCOMING_CALL -> AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
+                // Navigation/accessibility usages are mixed over ringtone on Samsung;
+                // USAGE_ALARM + MEDIA are often ducked or inaudible while ringing.
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()

@@ -32,10 +32,12 @@ class AudioRoutingManager(context: Context) {
 
     private var focusRequest: AudioFocusRequest? = null
     private var savedRingVolume: Int? = null
+    private var savedNotificationVolume: Int? = null
     private var savedRingerMode: Int? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var incomingCallSessionActive = false
     private var savedSpeakerphoneOn: Boolean? = null
+    private var forcedSpeakerphoneForCall = false
     private var ringSilenceKeepAlive: Runnable? = null
 
     fun shouldAnnounce(playMode: PlayMode): Boolean {
@@ -134,24 +136,26 @@ class AudioRoutingManager(context: Context) {
             if (savedRingVolume == null) {
                 savedRingVolume = audioManager.getStreamVolume(AudioManager.STREAM_RING)
             }
+            if (savedNotificationVolume == null) {
+                savedNotificationVolume =
+                    audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
+            }
             silenceRingtoneForAnnouncement()
+            forceSpeakerForCallAnnouncement()
             startRingSilenceKeepAlive()
             Log.i(
                 TAG,
                 "Silenced ringtone for announcement " +
-                    "(modeWas=$savedRingerMode volWas=$savedRingVolume)",
+                    "(modeWas=$savedRingerMode volWas=$savedRingVolume " +
+                    "headset=${isHeadsetOrBluetoothConnected()})",
             )
         } catch (e: Exception) {
             Log.w(TAG, "Could not silence ringtone", e)
         }
 
-        // USAGE_ALARM often bleeds to the phone speaker even with headphones connected.
-        if (isHeadsetOrBluetoothConnected()) {
-            boostMediaVolumeIfSilent()
-        } else {
-            boostAnnouncementStreamVolume()
-            boostMediaVolumeIfSilent()
-        }
+        // Navigation-guidance usage maps to media stream on many OEMs — keep it loud.
+        boostAnnouncementStreamVolume()
+        boostMediaVolumeForCallAnnouncement()
 
         try {
             if (audioManager.isBluetoothScoOn) {
@@ -161,11 +165,7 @@ class AudioRoutingManager(context: Context) {
         } catch (_: Exception) {
         }
 
-        if (isHeadsetOrBluetoothConnected()) {
-            requestTransientAudioFocus()
-        } else {
-            requestExclusiveAudioFocus()
-        }
+        requestExclusiveAudioFocus()
     }
 
     fun endIncomingCallAnnouncement() {
@@ -209,30 +209,84 @@ class AudioRoutingManager(context: Context) {
                     0,
                 )
             } catch (e: Exception) {
-                Log.w(TAG, "adjustStreamVolume MUTE failed", e)
+                Log.w(TAG, "adjustStreamVolume MUTE RING failed", e)
+            }
+            try {
+                audioManager.adjustStreamVolume(
+                    AudioManager.STREAM_NOTIFICATION,
+                    AudioManager.ADJUST_MUTE,
+                    0,
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "adjustStreamVolume MUTE NOTIFICATION failed", e)
             }
         }
         try {
             audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+            audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
         } catch (e: Exception) {
-            Log.w(TAG, "setStreamVolume RING 0 failed", e)
+            Log.w(TAG, "setStreamVolume RING/NOTIFICATION 0 failed", e)
         }
-        // Fallback: NORMAL → VIBRATE so the Phone app stops playing ringtone audio.
-        // Silent/DND already have no ring, so announcement worked there before.
+        // SILENT stops ringtone audio more reliably than VIBRATE on Samsung.
         try {
             if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+                audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Could not switch ringer to vibrate", e)
+            Log.w(TAG, "Could not switch ringer to silent — trying vibrate", e)
+            try {
+                if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                    audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+                }
+            } catch (e2: Exception) {
+                Log.w(TAG, "Could not switch ringer to vibrate", e2)
+            }
+        }
+    }
+
+    /** Route announcement to the loudspeaker when no headset is pinned. */
+    private fun forceSpeakerForCallAnnouncement() {
+        if (isHeadsetOrBluetoothConnected()) return
+        try {
+            if (savedSpeakerphoneOn == null) {
+                savedSpeakerphoneOn = audioManager.isSpeakerphoneOn
+            }
+            if (!audioManager.isSpeakerphoneOn) {
+                audioManager.isSpeakerphoneOn = true
+                forcedSpeakerphoneForCall = true
+                Log.i(TAG, "Forced speakerphone ON for call announcement")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not force speakerphone", e)
         }
     }
 
     private fun restoreRingtoneAfterAnnouncement() {
         try {
+            if (forcedSpeakerphoneForCall) {
+                savedSpeakerphoneOn?.let { previous ->
+                    audioManager.isSpeakerphoneOn = previous
+                    Log.i(TAG, "Restored speakerphone=$previous after call announcement")
+                }
+                // Only clear if exclusive-headset path did not own this snapshot.
+                if (!isHeadsetOrBluetoothConnected()) {
+                    savedSpeakerphoneOn = null
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not restore speakerphone", e)
+        } finally {
+            forcedSpeakerphoneForCall = false
+        }
+        try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 audioManager.adjustStreamVolume(
                     AudioManager.STREAM_RING,
+                    AudioManager.ADJUST_UNMUTE,
+                    0,
+                )
+                audioManager.adjustStreamVolume(
+                    AudioManager.STREAM_NOTIFICATION,
                     AudioManager.ADJUST_UNMUTE,
                     0,
                 )
@@ -260,6 +314,16 @@ class AudioRoutingManager(context: Context) {
         } finally {
             savedRingVolume = null
         }
+        try {
+            savedNotificationVolume?.let { previous ->
+                audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, previous, 0)
+                Log.i(TAG, "Restored STREAM_NOTIFICATION to $previous")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not restore notification volume", e)
+        } finally {
+            savedNotificationVolume = null
+        }
     }
 
     private fun startRingSilenceKeepAlive() {
@@ -268,9 +332,15 @@ class AudioRoutingManager(context: Context) {
             override fun run() {
                 if (!incomingCallSessionActive) return
                 try {
+                    if (audioManager.mode != AudioManager.MODE_NORMAL) {
+                        audioManager.mode = AudioManager.MODE_NORMAL
+                    }
                     if (audioManager.getStreamVolume(AudioManager.STREAM_RING) > 0) {
                         audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
                         Log.i(TAG, "Re-applied RING mute (OEM restored volume)")
+                    }
+                    if (audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION) > 0) {
+                        audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
                     }
                     if (
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
@@ -283,7 +353,10 @@ class AudioRoutingManager(context: Context) {
                         )
                     }
                     if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                        audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+                        audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
+                    }
+                    if (forcedSpeakerphoneForCall && !audioManager.isSpeakerphoneOn) {
+                        audioManager.isSpeakerphoneOn = true
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Ring silence keep-alive failed", e)
@@ -304,7 +377,6 @@ class AudioRoutingManager(context: Context) {
         try {
             val stream = AudioManager.STREAM_ALARM
             val max = audioManager.getStreamMaxVolume(stream)
-            // Near-max so caller name cuts through after ringtone is silenced.
             val target = (max * 0.9f).toInt().coerceAtLeast(1)
             val current = audioManager.getStreamVolume(stream)
             if (current < target) {
@@ -313,6 +385,20 @@ class AudioRoutingManager(context: Context) {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not boost alarm stream", e)
+        }
+    }
+
+    private fun boostMediaVolumeForCallAnnouncement() {
+        try {
+            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val target = (max * 0.85f).toInt().coerceAtLeast(1)
+            val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (current < target) {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                Log.i(TAG, "Boosted STREAM_MUSIC from $current to $target for call announcement")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not boost media volume", e)
         }
     }
 
@@ -332,7 +418,7 @@ class AudioRoutingManager(context: Context) {
     private fun requestExclusiveAudioFocus(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()
@@ -346,7 +432,7 @@ class AudioRoutingManager(context: Context) {
             @Suppress("DEPRECATION")
             audioManager.requestAudioFocus(
                 null,
-                AudioManager.STREAM_ALARM,
+                AudioManager.STREAM_MUSIC,
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE,
             ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         }

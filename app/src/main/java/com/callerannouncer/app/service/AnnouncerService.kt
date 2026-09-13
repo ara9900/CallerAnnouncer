@@ -232,10 +232,12 @@ class AnnouncerService : Service() {
             val headsetDevice = audioRoutingManager.beginExclusiveHeadsetOutput()
             try {
                 ttsManager.setSpeechParams(rate, pitch)
-                val route = when {
-                    headsetDevice != null -> PlaybackRoute.MEDIA
-                    forIncomingCall -> PlaybackRoute.INCOMING_CALL
-                    else -> PlaybackRoute.MEDIA
+                // Incoming call must NEVER use MEDIA — OEMs duck/mute media during ringtone.
+                // Prefer INCOMING_CALL attributes even when a headset is connected.
+                val route = if (forIncomingCall) {
+                    PlaybackRoute.INCOMING_CALL
+                } else {
+                    PlaybackRoute.MEDIA
                 }
                 val spoken = ttsManager.speakAndAwait(
                     text = text,
@@ -246,7 +248,7 @@ class AnnouncerService : Service() {
                 Log.i(
                     TAG,
                     "speak result=$spoken mode=$ttsEngineMode incoming=$forIncomingCall " +
-                        "headset=${headsetDevice != null} text=$text",
+                        "route=$route headset=${headsetDevice != null} text=$text",
                 )
                 spoken
             } finally {
