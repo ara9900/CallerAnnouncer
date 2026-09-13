@@ -43,6 +43,7 @@ import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.domain.model.PlayMode
 import com.callerannouncer.app.domain.model.TtsEngineMode
 import com.callerannouncer.app.ui.components.AppBackground
+import com.callerannouncer.app.ui.components.AppVersionLabel
 import com.callerannouncer.app.ui.components.SectionLabel
 import com.callerannouncer.app.ui.theme.AppColors
 import kotlin.math.roundToInt
@@ -198,6 +199,8 @@ fun SettingsScreen(
                 )
             }
 
+            Spacer(modifier = Modifier.height(12.dp))
+            AppVersionLabel(modifier = Modifier.align(Alignment.CenterHorizontally))
             Spacer(modifier = Modifier.height(20.dp))
         }
     }
