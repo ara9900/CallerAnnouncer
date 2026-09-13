@@ -80,6 +80,12 @@ class AudioRoutingManager(context: Context) {
         return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
     }
+
+    /**
+     * Pins playback to the connected headset/Bluetooth device and disables speakerphone
+     * so TTS is not duplicated on the phone speaker.
+     */
+    fun beginExclusiveHeadsetOutput(): AudioDeviceInfo? {
         val device = findHeadsetOutputDevice() ?: return null
         try {
             if (savedSpeakerphoneOn == null) {
