@@ -210,6 +210,7 @@ class AnnouncerService : Service() {
         ttsEngineMode: TtsEngineMode,
         onlineEdgeVoice: OnlineEdgeVoice,
     ): Boolean {
+        val requestedAt = System.currentTimeMillis()
         return speakMutex.withLock {
             if (!forcePlay && !audioRoutingManager.shouldAnnounce(playMode)) {
                 Log.i(TAG, "Skipped by playMode=$playMode")
@@ -225,13 +226,15 @@ class AnnouncerService : Service() {
             isSpeaking = true
             registerStopControls()
             refreshNotification(speaking = true)
-            // A connected headset owns the announcement so it is not duplicated on the
-            // phone speaker. Calls keep the alarm-stream route either way: it is the only
-            // usage that stays audible while the telephony ringtone holds focus.
+            // With a headset the announcement rides the media stream pinned to that device;
+            // the alarm stream ignores the preferred device and leaks onto the loudspeaker.
+            // Without a headset, the alarm stream is the only one audible over the ringtone.
             val headsetDevice = audioRoutingManager.beginExclusiveHeadsetOutput()
             if (forIncomingCall) {
                 isAnnouncingIncomingCall = true
-                audioRoutingManager.beginIncomingCallAnnouncement()
+                audioRoutingManager.beginIncomingCallAnnouncement(
+                    useHeadset = headsetDevice != null,
+                )
             } else {
                 val focusOk = audioRoutingManager.requestFocusAndRoute()
                 if (!focusOk) {
@@ -240,7 +243,7 @@ class AnnouncerService : Service() {
             }
             try {
                 ttsManager.setSpeechParams(rate, pitch)
-                val route = if (forIncomingCall) {
+                val route = if (forIncomingCall && headsetDevice == null) {
                     PlaybackRoute.INCOMING_CALL
                 } else {
                     PlaybackRoute.MEDIA
@@ -254,7 +257,8 @@ class AnnouncerService : Service() {
                 Log.i(
                     TAG,
                     "speak result=$spoken mode=$ttsEngineMode incoming=$forIncomingCall " +
-                        "route=$route headset=${headsetDevice != null} repeat=$repeatCount text=$text",
+                        "route=$route headset=${headsetDevice != null} repeat=$repeatCount " +
+                        "took=${System.currentTimeMillis() - requestedAt}ms text=$text",
                 )
                 spoken
             } finally {

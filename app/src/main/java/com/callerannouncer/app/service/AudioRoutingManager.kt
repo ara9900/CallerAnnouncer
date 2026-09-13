@@ -111,19 +111,23 @@ class AudioRoutingManager(context: Context) {
      * Ringer mode, audio mode and speakerphone are left untouched: overriding them on
      * One UI routes our TTS into a muted path while the ringtone keeps the speaker.
      */
-    fun beginIncomingCallAnnouncement() {
+    fun beginIncomingCallAnnouncement(useHeadset: Boolean) {
         if (incomingCallSessionActive) return
         incomingCallSessionActive = true
 
         acquireWakeLock()
         duckRingtone(appContext)
         startRingDuckKeepAlive()
-        boostAnnouncementStreamVolume()
+        if (useHeadset) {
+            boostMediaVolumeForAnnouncement()
+        } else {
+            boostAnnouncementStreamVolume()
+        }
         logAudioState("begin")
-        // Exclusive focus only: a duckable request lets the ringtone attenuate the
-        // announcement into silence, which is what happens on One UI.
-        val granted = requestExclusiveAudioFocus()
-        Log.i(TAG, "Announcement focus granted=$granted")
+        // Exclusive focus in both cases: a duckable request lets the ringtone attenuate
+        // the announcement into silence on One UI.
+        val granted = requestExclusiveAudioFocus(useHeadset)
+        Log.i(TAG, "Announcement focus granted=$granted useHeadset=$useHeadset")
     }
 
     fun endIncomingCallAnnouncement() {
@@ -208,6 +212,21 @@ class AudioRoutingManager(context: Context) {
         }
     }
 
+    /** Headset announcements ride the media stream, so it must be loud enough to hear. */
+    private fun boostMediaVolumeForAnnouncement() {
+        try {
+            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            val target = (max * 0.85f).toInt().coerceAtLeast(1)
+            val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (current < target) {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                Log.i(TAG, "Boosted STREAM_MUSIC from $current to $target for call announcement")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not boost media volume", e)
+        }
+    }
+
     private fun boostMediaVolumeIfSilent() {
         try {
             if (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) == 0) {
@@ -221,12 +240,18 @@ class AudioRoutingManager(context: Context) {
         }
     }
 
-    private fun requestExclusiveAudioFocus(): Boolean {
+    private fun requestExclusiveAudioFocus(useHeadset: Boolean): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ALARM)
+                .apply {
+                    if (useHeadset) {
+                        setUsage(AudioAttributes.USAGE_MEDIA)
+                    } else {
+                        setUsage(AudioAttributes.USAGE_ALARM)
+                        setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
+                    }
+                }
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()
             val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                 .setAudioAttributes(attrs)
@@ -238,7 +263,7 @@ class AudioRoutingManager(context: Context) {
             @Suppress("DEPRECATION")
             audioManager.requestAudioFocus(
                 null,
-                AudioManager.STREAM_ALARM,
+                if (useHeadset) AudioManager.STREAM_MUSIC else AudioManager.STREAM_ALARM,
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
             ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         }

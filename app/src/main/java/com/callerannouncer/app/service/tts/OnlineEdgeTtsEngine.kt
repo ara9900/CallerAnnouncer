@@ -38,11 +38,13 @@ class OnlineEdgeTtsEngine(context: Context) {
         val times = repeatCount.coerceIn(1, 5)
         return withContext(Dispatchers.IO) {
             try {
+                val startedAt = System.currentTimeMillis()
                 player.resetCancellation()
                 // Rendered once per announcement: repeats replay the same audio instead of
                 // waiting seconds for another network round trip.
                 val mp3 = audioFor(text)
                 if (mp3.isEmpty() || player.isStopped()) return@withContext false
+                Log.i(TAG, "audio ready in ${System.currentTimeMillis() - startedAt}ms")
                 repeat(times) { index ->
                     if (index > 0) {
                         Thread.sleep(REPEAT_GAP_MS)

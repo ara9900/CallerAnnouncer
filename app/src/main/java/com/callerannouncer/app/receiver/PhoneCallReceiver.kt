@@ -97,7 +97,7 @@ class PhoneCallReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "PhoneCallReceiver"
         private const val DEBOUNCE_MS = 15_000L
-        private const val BLANK_NUMBER_DELAY_MS = 350L
+        private const val BLANK_NUMBER_DELAY_MS = 250L
 
         private val handler = Handler(Looper.getMainLooper())
 
