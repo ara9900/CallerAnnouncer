@@ -111,27 +111,19 @@ class AudioRoutingManager(context: Context) {
      * Ringer mode, audio mode and speakerphone are left untouched: overriding them on
      * One UI routes our TTS into a muted path while the ringtone keeps the speaker.
      */
-    fun beginIncomingCallAnnouncement(useHeadset: Boolean) {
+    fun beginIncomingCallAnnouncement() {
         if (incomingCallSessionActive) return
         incomingCallSessionActive = true
 
         acquireWakeLock()
         duckRingtone(appContext)
         startRingDuckKeepAlive()
-        if (useHeadset) {
-            // Media stream follows the pinned headset; the alarm stream would also
-            // leak onto the phone speaker.
-            boostMediaVolumeIfSilent()
-        } else {
-            boostAnnouncementStreamVolume()
-        }
+        boostAnnouncementStreamVolume()
         logAudioState("begin")
-        val granted = if (useHeadset) {
-            requestTransientAudioFocus()
-        } else {
-            requestExclusiveAudioFocus()
-        }
-        Log.i(TAG, "Announcement focus granted=$granted useHeadset=$useHeadset")
+        // Exclusive focus only: a duckable request lets the ringtone attenuate the
+        // announcement into silence, which is what happens on One UI.
+        val granted = requestExclusiveAudioFocus()
+        Log.i(TAG, "Announcement focus granted=$granted")
     }
 
     fun endIncomingCallAnnouncement() {

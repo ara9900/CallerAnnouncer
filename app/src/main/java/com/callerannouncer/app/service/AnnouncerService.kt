@@ -221,13 +221,12 @@ class AnnouncerService : Service() {
             registerStopControls()
             refreshNotification(speaking = true)
             // A connected headset owns the announcement so it is not duplicated on the
-            // phone speaker; without one, calls fall back to the alarm-stream route.
+            // phone speaker. Calls keep the alarm-stream route either way: it is the only
+            // usage that stays audible while the telephony ringtone holds focus.
             val headsetDevice = audioRoutingManager.beginExclusiveHeadsetOutput()
             if (forIncomingCall) {
                 isAnnouncingIncomingCall = true
-                audioRoutingManager.beginIncomingCallAnnouncement(
-                    useHeadset = headsetDevice != null,
-                )
+                audioRoutingManager.beginIncomingCallAnnouncement()
             } else {
                 val focusOk = audioRoutingManager.requestFocusAndRoute()
                 if (!focusOk) {
@@ -236,7 +235,7 @@ class AnnouncerService : Service() {
             }
             try {
                 ttsManager.setSpeechParams(rate, pitch)
-                val route = if (forIncomingCall && headsetDevice == null) {
+                val route = if (forIncomingCall) {
                     PlaybackRoute.INCOMING_CALL
                 } else {
                     PlaybackRoute.MEDIA
@@ -250,7 +249,7 @@ class AnnouncerService : Service() {
                 Log.i(
                     TAG,
                     "speak result=$spoken mode=$ttsEngineMode incoming=$forIncomingCall " +
-                        "route=$route headset=${headsetDevice != null} text=$text",
+                        "route=$route headset=${headsetDevice != null} repeat=$repeatCount text=$text",
                 )
                 spoken
             } finally {
