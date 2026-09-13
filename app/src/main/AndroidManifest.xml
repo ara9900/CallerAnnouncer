@@ -6,6 +6,7 @@
         android:required="false" />
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.READ_CONTACTS" />
@@ -50,6 +51,15 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Announces incoming calls and SMS via offline TTS for accessibility" />
+        </service>
+
+        <service
+            android:name=".service.VoiceCacheService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Pre-renders contact announcements so calls can be announced offline" />
         </service>
 
         <receiver

@@ -3,6 +3,7 @@ package com.callerannouncer.app.service.tts
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.util.Log
+import com.callerannouncer.app.data.cache.TtsAudioCache
 import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.service.tts.edge.EdgeTtsClient
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +12,7 @@ import kotlinx.coroutines.withContext
 /** Online Persian TTS using Microsoft Edge neural voices (Dilara / Farid). */
 class OnlineEdgeTtsEngine(context: Context) {
 
+    private val appContext = context.applicationContext
     private val client = EdgeTtsClient()
     private val player = Mp3AudioPlayer(context.applicationContext)
     private var voice: OnlineEdgeVoice = OnlineEdgeVoice.DILARA
@@ -37,9 +39,9 @@ class OnlineEdgeTtsEngine(context: Context) {
         return withContext(Dispatchers.IO) {
             try {
                 player.resetCancellation()
-                // One network round trip per announcement — repeats replay the same audio,
-                // otherwise every repeat waited seconds for a fresh synthesis.
-                val mp3 = synthesizeCached(text)
+                // Rendered once per announcement: repeats replay the same audio instead of
+                // waiting seconds for another network round trip.
+                val mp3 = audioFor(text)
                 if (mp3.isEmpty() || player.isStopped()) return@withContext false
                 repeat(times) { index ->
                     if (index > 0) {
@@ -63,12 +65,27 @@ class OnlineEdgeTtsEngine(context: Context) {
         }
     }
 
-    /** Repeat callers from the same contact skip the network entirely. */
-    private suspend fun synthesizeCached(text: String): ByteArray {
-        val key = "$text|${voice.voiceId}|$speechRate|$pitch"
-        synchronized(cache) { cache[key] }?.let {
-            Log.i(TAG, "Reusing cached synthesis (${it.size} bytes)")
-            return it
+    /** Renders [text] into the cache without playing it — used by contact pre-caching. */
+    suspend fun prepare(text: String): Boolean {
+        if (text.isBlank()) return false
+        return withContext(Dispatchers.IO) {
+            try {
+                audioFor(text).isNotEmpty()
+            } catch (e: Exception) {
+                Log.w(TAG, "Prepare failed for \"$text\": ${e.message}")
+                false
+            }
+        }
+    }
+
+    fun isCached(text: String): Boolean =
+        TtsAudioCache.contains(appContext, cacheKey(text))
+
+    private suspend fun audioFor(text: String): ByteArray {
+        val key = cacheKey(text)
+        TtsAudioCache.get(appContext, key)?.let { cached ->
+            Log.i(TAG, "Cache hit (${cached.size} bytes) for \"$text\"")
+            return cached
         }
         val startedAt = System.currentTimeMillis()
         val mp3 = client.synthesize(
@@ -80,25 +97,18 @@ class OnlineEdgeTtsEngine(context: Context) {
         )
         Log.i(TAG, "Synthesized ${mp3.size} bytes in ${System.currentTimeMillis() - startedAt}ms")
         if (mp3.isNotEmpty()) {
-            synchronized(cache) {
-                cache[key] = mp3
-                while (cache.size > MAX_CACHE_ENTRIES) {
-                    val eldest = cache.keys.firstOrNull() ?: break
-                    cache.remove(eldest)
-                }
-            }
+            TtsAudioCache.put(appContext, key, mp3)
         }
         return mp3
     }
+
+    private fun cacheKey(text: String): String =
+        TtsAudioCache.keyOf(voice.voiceId, text, speechRate, pitch)
 
     fun stop() = player.stop()
 
     companion object {
         private const val TAG = "OnlineEdgeTts"
         private const val REPEAT_GAP_MS = 250L
-        private const val MAX_CACHE_ENTRIES = 12
-
-        /** Access-ordered so the eldest entry is the least recently used one. */
-        private val cache = LinkedHashMap<String, ByteArray>(16, 0.75f, true)
     }
 }

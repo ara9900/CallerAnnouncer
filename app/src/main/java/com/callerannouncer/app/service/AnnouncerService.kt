@@ -22,6 +22,7 @@ import androidx.core.content.ContextCompat
 import com.callerannouncer.app.MainActivity
 import com.callerannouncer.app.R
 import com.callerannouncer.app.data.preferences.SettingsRepository
+import com.callerannouncer.app.domain.AnnouncementText
 import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.domain.model.PlayMode
 import com.callerannouncer.app.domain.model.TtsEngineMode
@@ -121,7 +122,7 @@ class AnnouncerService : Service() {
     private suspend fun announceCall(displayName: String) {
         val settings = settingsRepository.settingsFlow.first()
         if (!settings.isCallAnnouncerEnabled) return
-        val text = "${settings.callPrefix} $displayName ${settings.callSuffix}"
+        val text = AnnouncementText.call(settings, displayName)
         speak(
             text = text,
             repeatCount = settings.callRepeatCount,
@@ -138,18 +139,22 @@ class AnnouncerService : Service() {
     private suspend fun announceSms(sender: String, body: String) {
         val settings = settingsRepository.settingsFlow.first()
         if (!settings.isSmsAnnouncerEnabled) return
-        val text = buildString {
-            append(settings.smsPrefix)
-            append(' ')
-            append(sender)
-            if (settings.readSmsBody && body.isNotBlank()) {
-                append(". متن پیام: ")
-                append(body)
-            }
-        }
-        speak(
-            text = text,
+        val senderSpoken = speak(
+            text = AnnouncementText.smsSender(settings, sender),
             repeatCount = settings.smsRepeatCount,
+            rate = settings.speechRate,
+            pitch = settings.pitch,
+            playMode = settings.playMode,
+            forcePlay = false,
+            ttsEngineMode = settings.ttsEngineMode,
+            onlineEdgeVoice = settings.onlineEdgeVoice,
+        )
+        if (!senderSpoken || !settings.readSmsBody || body.isBlank()) return
+        // The body is read once regardless of the repeat count — repeating a whole
+        // message is never what the user wants.
+        speak(
+            text = AnnouncementText.smsBody(body),
+            repeatCount = 1,
             rate = settings.speechRate,
             pitch = settings.pitch,
             playMode = settings.playMode,

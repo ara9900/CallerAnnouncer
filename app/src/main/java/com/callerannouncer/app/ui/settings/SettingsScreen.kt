@@ -16,11 +16,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +57,7 @@ private val PanelShape = RoundedCornerShape(20.dp)
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     onBack: () -> Unit,
+    onOpenVoiceCache: () -> Unit,
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
 
@@ -126,6 +130,12 @@ fun SettingsScreen(
                     }
                 }
             }
+
+            NavigationLine(
+                title = "صدای مخاطبان (آفلاین)",
+                subtitle = "اعلام مخاطبان یک بار دریافت و ذخیره شود تا بی‌درنگ و بی‌اینترنت خوانده شود",
+                onClick = onOpenVoiceCache,
+            )
 
             SectionLabel(title = "صدا", subtitle = "تکرار تماس و پیامک جداست؛ سرعت و زیر و بمی")
             SettingsPanel {
@@ -203,6 +213,44 @@ fun SettingsScreen(
             AppVersionLabel(modifier = Modifier.align(Alignment.CenterHorizontally))
             Spacer(modifier = Modifier.height(20.dp))
         }
+    }
+}
+
+@Composable
+private fun NavigationLine(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(PanelShape)
+            .background(AppColors.Paper.copy(alpha = 0.92f))
+            .border(1.dp, AppColors.Line, PanelShape)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            )
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.CloudDownload,
+            contentDescription = null,
+            tint = AppColors.Copper,
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = AppColors.Ink)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = AppColors.Muted)
+        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
+            contentDescription = null,
+            tint = AppColors.Muted,
+        )
     }
 }
 

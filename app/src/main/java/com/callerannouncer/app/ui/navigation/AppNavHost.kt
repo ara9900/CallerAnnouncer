@@ -11,10 +11,13 @@ import com.callerannouncer.app.ui.dashboard.DashboardScreen
 import com.callerannouncer.app.ui.dashboard.DashboardViewModel
 import com.callerannouncer.app.ui.settings.SettingsScreen
 import com.callerannouncer.app.ui.settings.SettingsViewModel
+import com.callerannouncer.app.ui.voicecache.VoiceCacheScreen
+import com.callerannouncer.app.ui.voicecache.VoiceCacheViewModel
 
 object Routes {
     const val DASHBOARD = "dashboard"
     const val SETTINGS = "settings"
+    const val VOICE_CACHE = "voice_cache"
 }
 
 @Composable
@@ -39,6 +42,14 @@ fun AppNavHost(
         composable(Routes.SETTINGS) {
             val vm: SettingsViewModel = viewModel()
             SettingsScreen(
+                viewModel = vm,
+                onBack = { navController.popBackStack() },
+                onOpenVoiceCache = { navController.navigate(Routes.VOICE_CACHE) }
+            )
+        }
+        composable(Routes.VOICE_CACHE) {
+            val vm: VoiceCacheViewModel = viewModel()
+            VoiceCacheScreen(
                 viewModel = vm,
                 onBack = { navController.popBackStack() }
             )
