@@ -1,5 +1,5 @@
 ---
-description: Always build APK via GitHub Actions; no local Gradle builds
+description: Always build APK via GitHub Actions; no local Gradle builds; install on phone
 alwaysApply: true
 ---
 
@@ -10,4 +10,8 @@ alwaysApply: true
 - After push, wait for the Actions run and share:
   - Actions run URL
   - Artifact name: `CallerAnnouncer-Debug-APK`
+- **Always install on the connected phone** after a successful Actions build:
+  1. `gh run download <run-id> -n CallerAnnouncer-Debug-APK -D <temp-dir>`
+  2. `adb install -r <temp-dir>/app-release.apk` (confirm `adb devices` first)
+  3. Tell the user the installed `versionName` in Persian
 - Speak with the user in Persian for this project.

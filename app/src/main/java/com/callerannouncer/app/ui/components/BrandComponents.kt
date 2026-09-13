@@ -49,6 +49,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.callerannouncer.app.BuildConfig
 import com.callerannouncer.app.ui.theme.AppColors
 
 private val HeroShape = RoundedCornerShape(28.dp)
@@ -75,6 +76,8 @@ fun BrandMark(
                 style = MaterialTheme.typography.bodyMedium,
                 color = AppColors.Muted,
             )
+            Spacer(modifier = Modifier.height(4.dp))
+            AppVersionLabel()
         }
         if (onSettings != null) {
             TextButton(onClick = onSettings) {
@@ -82,6 +85,16 @@ fun BrandMark(
             }
         }
     }
+}
+
+@Composable
+fun AppVersionLabel(modifier: Modifier = Modifier) {
+    Text(
+        text = "نسخه ${BuildConfig.VERSION_NAME}  ·  ${BuildConfig.VERSION_CODE}",
+        modifier = modifier,
+        style = MaterialTheme.typography.labelMedium,
+        color = AppColors.Muted,
+    )
 }
 
 @Composable
