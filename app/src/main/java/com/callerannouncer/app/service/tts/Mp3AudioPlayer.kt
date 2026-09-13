@@ -47,7 +47,7 @@ class Mp3AudioPlayer(context: Context) {
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                             .build()
                         PlaybackRoute.INCOMING_CALL -> AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                            .setUsage(AudioAttributes.USAGE_ALARM)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                             .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                             .build()

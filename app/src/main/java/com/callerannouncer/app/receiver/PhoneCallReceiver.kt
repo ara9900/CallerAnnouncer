@@ -27,6 +27,9 @@ class PhoneCallReceiver : BroadcastReceiver() {
             TelephonyManager.EXTRA_STATE_IDLE -> {
                 Log.i(TAG, "Call state=$state — stopping announcement")
                 AnnouncerService.stopCallAnnouncement(context.applicationContext)
+                // Safety net: the ring was ducked here, so it must be restored here too
+                // even when no announcement ran (disabled, play mode, skipped duplicate).
+                AudioRoutingManager.restoreRingtone(context.applicationContext)
                 if (state == TelephonyManager.EXTRA_STATE_IDLE) {
                     resetDebounce()
                 }
@@ -35,8 +38,8 @@ class PhoneCallReceiver : BroadcastReceiver() {
     }
 
     private fun handleRinging(context: Context, intent: Intent) {
-        // Mute ring immediately — waiting for the service is too late on Samsung.
-        AudioRoutingManager.silenceRingtoneNow(context.applicationContext)
+        // Duck ring immediately — waiting for the service is too late on Samsung.
+        AudioRoutingManager.duckRingtone(context.applicationContext)
 
         val number = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER).orEmpty()
         pendingAnnounceRunnable?.let { handler.removeCallbacks(it) }
@@ -63,7 +66,7 @@ class PhoneCallReceiver : BroadcastReceiver() {
             return
         }
 
-        AudioRoutingManager.silenceRingtoneNow(context)
+        AudioRoutingManager.duckRingtone(context)
         val displayName = ContactHelper.resolveDisplayName(context, number)
 
         Log.i(TAG, "Incoming call from=$number name=$displayName")

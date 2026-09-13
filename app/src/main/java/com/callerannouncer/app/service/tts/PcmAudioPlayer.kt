@@ -80,11 +80,17 @@ class PcmAudioPlayer(private val sampleRate: Int) {
 
         val expectedMs = (totalSamples.toLong() * 1000L / sampleRate) + 500L
         val deadline = System.currentTimeMillis() + expectedMs.coerceAtMost(120_000L)
+        var played = 0L
         while (System.currentTimeMillis() < deadline && !stopped) {
-            val played = audioTrack.playbackHeadPosition.toLong() and 0xFFFF_FFFFL
+            played = audioTrack.playbackHeadPosition.toLong() and 0xFFFF_FFFFL
             if (played >= totalSamples) break
             Thread.sleep(10)
         }
+        Log.i(
+            TAG,
+            "awaitPlayback done played=$played/$totalSamples route=$activeRoute " +
+                "state=${audioTrack.playState} routedDevice=${audioTrack.routedDevice?.type}",
+        )
     }
 
     fun endSession() {
@@ -136,8 +142,8 @@ class PcmAudioPlayer(private val sampleRate: Int) {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build()
             PlaybackRoute.INCOMING_CALL -> AudioAttributes.Builder()
-                // Accessibility usage is mixed loudly over ringtone on Samsung One UI.
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                // Alarm stream stays audible while the telephony ringtone plays.
+                .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()

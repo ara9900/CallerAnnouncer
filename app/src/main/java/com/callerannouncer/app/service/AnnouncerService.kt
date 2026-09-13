@@ -229,9 +229,10 @@ class AnnouncerService : Service() {
                     Log.w(TAG, "Audio focus denied — continuing anyway")
                 }
             }
-            // Pin call TTS to the phone loudspeaker — never to BT/watch during ring.
+            // For calls let the platform route the alarm stream; pinning a device while
+            // telephony owns the speaker ends up playing into a muted path on One UI.
             val headsetDevice = if (forIncomingCall) {
-                audioRoutingManager.findBuiltinSpeakerDevice()
+                null
             } else {
                 audioRoutingManager.beginExclusiveHeadsetOutput()
             }

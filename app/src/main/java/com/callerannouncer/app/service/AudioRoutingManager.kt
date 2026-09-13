@@ -19,7 +19,7 @@ import androidx.core.content.ContextCompat
 import com.callerannouncer.app.domain.model.PlayMode
 
 /**
- * Handles audio focus and ringtone silencing so TTS can be heard during incoming calls.
+ * Handles audio focus and ringtone ducking so TTS can be heard during incoming calls.
  */
 class AudioRoutingManager(context: Context) {
 
@@ -31,14 +31,10 @@ class AudioRoutingManager(context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private var focusRequest: AudioFocusRequest? = null
-    private var savedRingVolume: Int? = null
-    private var savedNotificationVolume: Int? = null
-    private var savedRingerMode: Int? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var incomingCallSessionActive = false
     private var savedSpeakerphoneOn: Boolean? = null
-    private var forcedSpeakerphoneForCall = false
-    private var ringSilenceKeepAlive: Runnable? = null
+    private var ringDuckKeepAlive: Runnable? = null
 
     fun shouldAnnounce(playMode: PlayMode): Boolean {
         return when (playMode) {
@@ -73,12 +69,6 @@ class AudioRoutingManager(context: Context) {
         return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             .filter { it.type in headsetTypes }
             .minByOrNull { headsetDevicePriority(it.type) }
-    }
-
-    /** Built-in loudspeaker device, if exposed by the OEM. */
-    fun findBuiltinSpeakerDevice(): AudioDeviceInfo? {
-        return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
     }
 
     /**
@@ -116,57 +106,21 @@ class AudioRoutingManager(context: Context) {
     }
 
     /**
-     * Silence the ringtone while announcing. On sound mode the ring otherwise buries TTS;
-     * OEMs (especially Samsung) often restore ring volume, so we keep re-applying mute.
+     * Duck the ringtone and take focus so the caller name can be heard over the ring.
+     * Ringer mode, audio mode and speakerphone are left untouched: overriding them on
+     * One UI routes our TTS into a muted path while the ringtone keeps the speaker.
      */
     fun beginIncomingCallAnnouncement() {
         if (incomingCallSessionActive) return
         incomingCallSessionActive = true
 
         acquireWakeLock()
-
-        try {
-            // Prevent Android from switching into an "in-call" audio mode
-            // that commonly mutes media/TTS streams.
-            if (audioManager.mode != AudioManager.MODE_NORMAL) {
-                audioManager.mode = AudioManager.MODE_NORMAL
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not set audio mode", e)
-        }
-
-        try {
-            if (savedRingVolume == null) {
-                savedRingVolume = audioManager.getStreamVolume(AudioManager.STREAM_RING)
-            }
-            if (savedNotificationVolume == null) {
-                savedNotificationVolume =
-                    audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
-            }
-            duckRingtoneForAnnouncement()
-            forceSpeakerForCallAnnouncement()
-            startRingDuckKeepAlive()
-            Log.i(
-                TAG,
-                "Ducked ringtone for announcement (volWas=$savedRingVolume) — ringer mode unchanged",
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not duck ringtone", e)
-        }
-
-        // Navigation-guidance usage maps to media stream on many OEMs — keep it loud.
+        duckRingtone(appContext)
+        startRingDuckKeepAlive()
         boostAnnouncementStreamVolume()
-        boostMediaVolumeForCallAnnouncement()
-
-        try {
-            if (audioManager.isBluetoothScoOn) {
-                audioManager.stopBluetoothSco()
-                audioManager.isBluetoothScoOn = false
-            }
-        } catch (_: Exception) {
-        }
-
-        requestExclusiveAudioFocus()
+        logAudioState("begin")
+        val granted = requestExclusiveAudioFocus()
+        Log.i(TAG, "Announcement focus granted=$granted")
     }
 
     fun endIncomingCallAnnouncement() {
@@ -175,22 +129,13 @@ class AudioRoutingManager(context: Context) {
 
         stopRingDuckKeepAlive()
         abandonAudioFocus()
-        restoreRingtoneAfterAnnouncement()
+        restoreRingtone(appContext)
         releaseWakeLock()
+        logAudioState("end")
     }
 
     fun requestFocusAndRoute(): Boolean {
         boostMediaVolumeIfSilent()
-        try {
-            if (audioManager.mode != AudioManager.MODE_NORMAL) {
-                audioManager.mode = AudioManager.MODE_NORMAL
-            }
-            if (audioManager.isBluetoothScoOn) {
-                audioManager.stopBluetoothSco()
-                audioManager.isBluetoothScoOn = false
-            }
-        } catch (_: Exception) {
-        }
         return requestTransientAudioFocus()
     }
 
@@ -200,77 +145,23 @@ class AudioRoutingManager(context: Context) {
         releaseWakeLock()
     }
 
-    /**
-     * Lower ring volume only — never change ringer mode (sound / vibrate / silent).
-     * Switching to vibrate was audible for TTS but a bad UX.
-     */
-    private fun duckRingtoneForAnnouncement() {
+    private fun logAudioState(phase: String) {
         try {
-            val maxRing = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
-            // Soft duck so TTS is clear; keep a tiny residual ring if possible.
-            val ducked = (maxRing * 0.12f).toInt().coerceAtLeast(0)
-            audioManager.setStreamVolume(AudioManager.STREAM_RING, ducked, 0)
-            audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
-            Log.i(TAG, "Ducked STREAM_RING to $ducked (ringerMode left alone)")
+            val outputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .joinToString(",") { "${it.type}" }
+            Log.i(
+                TAG,
+                "audioState[$phase] mode=${audioManager.mode} ringer=${audioManager.ringerMode} " +
+                    "ring=${audioManager.getStreamVolume(AudioManager.STREAM_RING)}/" +
+                    "${audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)} " +
+                    "music=${audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)} " +
+                    "alarm=${audioManager.getStreamVolume(AudioManager.STREAM_ALARM)} " +
+                    "speakerphone=${audioManager.isSpeakerphoneOn} " +
+                    "musicActive=${audioManager.isMusicActive} outputs=$outputs",
+            )
         } catch (e: Exception) {
-            Log.w(TAG, "setStreamVolume RING duck failed", e)
+            Log.w(TAG, "logAudioState failed", e)
         }
-    }
-
-    /** Route announcement to the loudspeaker — ignore BT so ring/TTS share the same output. */
-    private fun forceSpeakerForCallAnnouncement() {
-        try {
-            if (savedSpeakerphoneOn == null) {
-                savedSpeakerphoneOn = audioManager.isSpeakerphoneOn
-            }
-            if (!audioManager.isSpeakerphoneOn) {
-                audioManager.isSpeakerphoneOn = true
-                forcedSpeakerphoneForCall = true
-                Log.i(TAG, "Forced speakerphone ON for call announcement")
-            } else {
-                forcedSpeakerphoneForCall = true
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not force speakerphone", e)
-        }
-    }
-
-    private fun restoreRingtoneAfterAnnouncement() {
-        try {
-            if (forcedSpeakerphoneForCall) {
-                savedSpeakerphoneOn?.let { previous ->
-                    audioManager.isSpeakerphoneOn = previous
-                    Log.i(TAG, "Restored speakerphone=$previous after call announcement")
-                }
-                savedSpeakerphoneOn = null
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not restore speakerphone", e)
-        } finally {
-            forcedSpeakerphoneForCall = false
-        }
-        try {
-            savedRingVolume?.let { previous ->
-                audioManager.setStreamVolume(AudioManager.STREAM_RING, previous, 0)
-                Log.i(TAG, "Restored STREAM_RING to $previous")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not restore ring volume", e)
-        } finally {
-            savedRingVolume = null
-        }
-        try {
-            savedNotificationVolume?.let { previous ->
-                audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, previous, 0)
-                Log.i(TAG, "Restored STREAM_NOTIFICATION to $previous")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not restore notification volume", e)
-        } finally {
-            savedNotificationVolume = null
-        }
-        // Clear legacy field if an older session set it — never leave phone in vibrate.
-        savedRingerMode = null
     }
 
     private fun startRingDuckKeepAlive() {
@@ -279,35 +170,24 @@ class AudioRoutingManager(context: Context) {
             override fun run() {
                 if (!incomingCallSessionActive) return
                 try {
-                    if (audioManager.mode != AudioManager.MODE_NORMAL) {
-                        audioManager.mode = AudioManager.MODE_NORMAL
-                    }
-                    val maxRing = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
-                    val ducked = (maxRing * 0.12f).toInt().coerceAtLeast(0)
-                    val current = audioManager.getStreamVolume(AudioManager.STREAM_RING)
-                    if (current > ducked) {
-                        audioManager.setStreamVolume(AudioManager.STREAM_RING, ducked, 0)
-                        Log.i(TAG, "Re-applied RING duck (OEM restored volume)")
-                    }
-                    if (audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION) > 0) {
-                        audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
-                    }
-                    if (forcedSpeakerphoneForCall && !audioManager.isSpeakerphoneOn) {
-                        audioManager.isSpeakerphoneOn = true
+                    val target = duckTarget(audioManager)
+                    if (audioManager.getStreamVolume(AudioManager.STREAM_RING) > target) {
+                        audioManager.setStreamVolume(AudioManager.STREAM_RING, target, 0)
+                        Log.i(TAG, "Re-applied ring duck (OEM restored volume)")
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Ring duck keep-alive failed", e)
                 }
-                mainHandler.postDelayed(this, RING_SILENCE_INTERVAL_MS)
+                mainHandler.postDelayed(this, RING_DUCK_INTERVAL_MS)
             }
         }
-        ringSilenceKeepAlive = runnable
-        mainHandler.postDelayed(runnable, RING_SILENCE_INTERVAL_MS)
+        ringDuckKeepAlive = runnable
+        mainHandler.postDelayed(runnable, RING_DUCK_INTERVAL_MS)
     }
 
     private fun stopRingDuckKeepAlive() {
-        ringSilenceKeepAlive?.let { mainHandler.removeCallbacks(it) }
-        ringSilenceKeepAlive = null
+        ringDuckKeepAlive?.let { mainHandler.removeCallbacks(it) }
+        ringDuckKeepAlive = null
     }
 
     private fun boostAnnouncementStreamVolume() {
@@ -322,20 +202,6 @@ class AudioRoutingManager(context: Context) {
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not boost alarm stream", e)
-        }
-    }
-
-    private fun boostMediaVolumeForCallAnnouncement() {
-        try {
-            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            val target = (max * 0.85f).toInt().coerceAtLeast(1)
-            val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            if (current < target) {
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
-                Log.i(TAG, "Boosted STREAM_MUSIC from $current to $target for call announcement")
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "Could not boost media volume", e)
         }
     }
 
@@ -355,11 +221,11 @@ class AudioRoutingManager(context: Context) {
     private fun requestExclusiveAudioFocus(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val attrs = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                .setUsage(AudioAttributes.USAGE_ALARM)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
                 .build()
-            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
                 .setAudioAttributes(attrs)
                 .setOnAudioFocusChangeListener { }
                 .build()
@@ -369,8 +235,8 @@ class AudioRoutingManager(context: Context) {
             @Suppress("DEPRECATION")
             audioManager.requestAudioFocus(
                 null,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE,
+                AudioManager.STREAM_ALARM,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
             ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         }
     }
@@ -477,31 +343,54 @@ class AudioRoutingManager(context: Context) {
 
     companion object {
         private const val TAG = "AudioRoutingManager"
-        private const val RING_SILENCE_INTERVAL_MS = 250L
+        private const val RING_DUCK_INTERVAL_MS = 250L
+        private const val PREFS_NAME = "audio_routing_state"
+        private const val KEY_PRE_DUCK_RING_VOLUME = "pre_duck_ring_volume"
+
+        private fun duckTarget(audioManager: AudioManager): Int {
+            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
+            return (max * 0.12f).toInt().coerceAtLeast(0)
+        }
 
         /**
-         * Early ring duck from the phone-state receiver — volume only, never ringer mode.
+         * Lower ring volume only. The pre-duck level is persisted because the phone-state
+         * receiver ducks before the service starts, and the restore may run in another process.
          */
         @JvmStatic
-        fun silenceRingtoneNow(context: Context) {
+        fun duckRingtone(context: Context) {
+            val appContext = context.applicationContext
             try {
                 val audioManager =
-                    context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-                try {
-                    val maxRing = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
-                    val ducked = (maxRing * 0.12f).toInt().coerceAtLeast(0)
-                    audioManager.setStreamVolume(AudioManager.STREAM_RING, ducked, 0)
-                    audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
-                } catch (_: Exception) {
+                    appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val target = duckTarget(audioManager)
+                val current = audioManager.getStreamVolume(AudioManager.STREAM_RING)
+                if (!prefs.contains(KEY_PRE_DUCK_RING_VOLUME) && current > target) {
+                    prefs.edit().putInt(KEY_PRE_DUCK_RING_VOLUME, current).apply()
                 }
-                try {
-                    audioManager.mode = AudioManager.MODE_NORMAL
-                    audioManager.isSpeakerphoneOn = true
-                } catch (_: Exception) {
-                }
-                Log.i(TAG, "silenceRingtoneNow ducked volume only (ringer mode unchanged)")
+                audioManager.setStreamVolume(AudioManager.STREAM_RING, target, 0)
+                Log.i(TAG, "Ducked ring $current -> $target (saved=${prefs.getInt(KEY_PRE_DUCK_RING_VOLUME, -1)})")
             } catch (e: Exception) {
-                Log.w(TAG, "silenceRingtoneNow failed", e)
+                Log.w(TAG, "duckRingtone failed", e)
+            }
+        }
+
+        /** Restore the ring volume captured before the first duck of this call. */
+        @JvmStatic
+        fun restoreRingtone(context: Context) {
+            val appContext = context.applicationContext
+            try {
+                val audioManager =
+                    appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val saved = prefs.getInt(KEY_PRE_DUCK_RING_VOLUME, -1)
+                if (saved >= 0) {
+                    audioManager.setStreamVolume(AudioManager.STREAM_RING, saved, 0)
+                    prefs.edit().remove(KEY_PRE_DUCK_RING_VOLUME).apply()
+                    Log.i(TAG, "Restored ring volume to $saved")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "restoreRingtone failed", e)
             }
         }
     }
