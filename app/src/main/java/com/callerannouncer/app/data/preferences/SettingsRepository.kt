@@ -26,7 +26,10 @@ class SettingsRepository(private val context: Context) {
         val CALL_ENABLED = booleanPreferencesKey("is_call_announcer_enabled")
         val SMS_ENABLED = booleanPreferencesKey("is_sms_announcer_enabled")
         val READ_SMS_BODY = booleanPreferencesKey("read_sms_body")
+        /** Legacy single repeat; kept for migrating call repeat. */
         val REPEAT_COUNT = intPreferencesKey("repeat_count")
+        val CALL_REPEAT_COUNT = intPreferencesKey("call_repeat_count")
+        val SMS_REPEAT_COUNT = intPreferencesKey("sms_repeat_count")
         val PLAY_MODE = stringPreferencesKey("play_mode")
         val TTS_ENGINE_MODE = stringPreferencesKey("tts_engine_mode")
         val ONLINE_EDGE_VOICE = stringPreferencesKey("online_edge_voice")
@@ -42,7 +45,10 @@ class SettingsRepository(private val context: Context) {
             isCallAnnouncerEnabled = prefs[Keys.CALL_ENABLED] ?: true,
             isSmsAnnouncerEnabled = prefs[Keys.SMS_ENABLED] ?: true,
             readSmsBody = prefs[Keys.READ_SMS_BODY] ?: false,
-            repeatCount = (prefs[Keys.REPEAT_COUNT] ?: 2).coerceIn(1, 5),
+            callRepeatCount = (
+                prefs[Keys.CALL_REPEAT_COUNT] ?: prefs[Keys.REPEAT_COUNT] ?: 2
+            ).coerceIn(1, 5),
+            smsRepeatCount = (prefs[Keys.SMS_REPEAT_COUNT] ?: 1).coerceIn(1, 5),
             playMode = PlayMode.fromName(prefs[Keys.PLAY_MODE] ?: PlayMode.ALWAYS.name),
             ttsEngineMode = TtsEngineMode.fromName(
                 prefs[Keys.TTS_ENGINE_MODE] ?: TtsEngineMode.OFFLINE.name,
@@ -70,8 +76,12 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[Keys.READ_SMS_BODY] = enabled }
     }
 
-    suspend fun setRepeatCount(count: Int) {
-        context.settingsDataStore.edit { it[Keys.REPEAT_COUNT] = count.coerceIn(1, 5) }
+    suspend fun setCallRepeatCount(count: Int) {
+        context.settingsDataStore.edit { it[Keys.CALL_REPEAT_COUNT] = count.coerceIn(1, 5) }
+    }
+
+    suspend fun setSmsRepeatCount(count: Int) {
+        context.settingsDataStore.edit { it[Keys.SMS_REPEAT_COUNT] = count.coerceIn(1, 5) }
     }
 
     suspend fun setPlayMode(mode: PlayMode) {

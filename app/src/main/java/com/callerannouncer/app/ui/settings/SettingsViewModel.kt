@@ -23,8 +23,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun setReadSmsBody(enabled: Boolean) =
         viewModelScope.launch { repository.setReadSmsBody(enabled) }
 
-    fun setRepeatCount(count: Int) =
-        viewModelScope.launch { repository.setRepeatCount(count) }
+    fun setCallRepeatCount(count: Int) =
+        viewModelScope.launch { repository.setCallRepeatCount(count) }
+
+    fun setSmsRepeatCount(count: Int) =
+        viewModelScope.launch { repository.setSmsRepeatCount(count) }
 
     fun setPlayMode(mode: PlayMode) =
         viewModelScope.launch { repository.setPlayMode(mode) }

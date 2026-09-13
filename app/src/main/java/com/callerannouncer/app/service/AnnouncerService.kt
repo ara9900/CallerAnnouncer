@@ -124,7 +124,7 @@ class AnnouncerService : Service() {
         val text = "${settings.callPrefix} $displayName ${settings.callSuffix}"
         speak(
             text = text,
-            repeatCount = settings.repeatCount,
+            repeatCount = settings.callRepeatCount,
             rate = settings.speechRate,
             pitch = settings.pitch,
             playMode = settings.playMode,
@@ -149,7 +149,7 @@ class AnnouncerService : Service() {
         }
         speak(
             text = text,
-            repeatCount = settings.repeatCount,
+            repeatCount = settings.smsRepeatCount,
             rate = settings.speechRate,
             pitch = settings.pitch,
             playMode = settings.playMode,

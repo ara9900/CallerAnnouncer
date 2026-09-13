@@ -126,15 +126,24 @@ fun SettingsScreen(
                 }
             }
 
-            SectionLabel(title = "صدا", subtitle = "سرعت، زیر و بمی و تعداد تکرار")
+            SectionLabel(title = "صدا", subtitle = "تکرار تماس و پیامک جداست؛ سرعت و زیر و بمی")
             SettingsPanel {
                 SliderLine(
-                    title = "تعداد تکرار",
-                    valueLabel = "${settings.repeatCount}",
-                    value = settings.repeatCount.toFloat(),
+                    title = "تکرار تماس",
+                    valueLabel = "${settings.callRepeatCount}",
+                    value = settings.callRepeatCount.toFloat(),
                     range = 1f..5f,
                     steps = 3,
-                    onChange = { viewModel.setRepeatCount(it.roundToInt()) },
+                    onChange = { viewModel.setCallRepeatCount(it.roundToInt()) },
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                SliderLine(
+                    title = "تکرار پیامک",
+                    valueLabel = "${settings.smsRepeatCount}",
+                    value = settings.smsRepeatCount.toFloat(),
+                    range = 1f..5f,
+                    steps = 3,
+                    onChange = { viewModel.setSmsRepeatCount(it.roundToInt()) },
                 )
                 Spacer(modifier = Modifier.height(14.dp))
                 SliderLine(
