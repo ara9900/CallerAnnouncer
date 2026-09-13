@@ -66,17 +66,19 @@ class Mp3AudioPlayer(context: Context) {
 
                 try {
                     player.setAudioAttributes(attributesFor(route))
-                    if (outputDevice != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        val routed = player.setPreferredDevice(outputDevice)
-                        Log.i(TAG, "Pinned to ${outputDevice.productName} routed=$routed")
-                    }
                     player.setDataSource(tempFile.absolutePath)
                     player.setOnPreparedListener {
                         Log.i(TAG, "prepared in ${System.currentTimeMillis() - requestedAt}ms")
                         if (stopped) {
                             finish(false)
-                        } else {
-                            player.start()
+                            return@setOnPreparedListener
+                        }
+                        // Pinning only sticks once the player owns an audio track,
+                        // so it has to happen here and not before prepare.
+                        pinOutput(player, outputDevice)
+                        player.start()
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            Log.i(TAG, "playing on device type=${player.routedDevice?.type}")
                         }
                     }
                     player.setOnCompletionListener {
@@ -126,6 +128,12 @@ class Mp3AudioPlayer(context: Context) {
         } finally {
             tempFile.delete()
         }
+    }
+
+    private fun pinOutput(player: MediaPlayer, outputDevice: AudioDeviceInfo?) {
+        if (outputDevice == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val routed = player.setPreferredDevice(outputDevice)
+        Log.i(TAG, "Pinned to ${outputDevice.productName} routed=$routed")
     }
 
     private fun attributesFor(route: PlaybackRoute): AudioAttributes = when (route) {
