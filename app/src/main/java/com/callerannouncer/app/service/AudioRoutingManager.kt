@@ -174,7 +174,7 @@ class AudioRoutingManager(context: Context) {
 
     /**
      * Telecom holds MODE_RINGTONE while the phone rings, which parks classic A2DP media.
-     * Force MODE_NORMAL and select a real communication device (BLE/SCO — never A2DP).
+     * Open the HFP/SCO (or BLE communication) path that still works during ringing.
      */
     private fun unlockHeadsetMediaPath() {
         try {
@@ -182,9 +182,11 @@ class AudioRoutingManager(context: Context) {
                 savedAudioMode = audioManager.mode
             }
             unlockHeadsetMedia = true
-            if (audioManager.mode != AudioManager.MODE_NORMAL) {
-                audioManager.mode = AudioManager.MODE_NORMAL
-                Log.i(TAG, "Forced MODE_NORMAL (was $savedAudioMode) for headset media")
+            // IN_COMMUNICATION is the mode SCO/HFP expects; NORMAL keeps getting overwritten
+            // by Telecom and leaves A2DP parked.
+            if (audioManager.mode != AudioManager.MODE_IN_COMMUNICATION) {
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                Log.i(TAG, "Forced MODE_IN_COMMUNICATION (was $savedAudioMode) for headset call audio")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val communicationDevice = findCommunicationHeadset()
@@ -197,10 +199,9 @@ class AudioRoutingManager(context: Context) {
                             "ok=$ok type=${communicationDevice.type}",
                     )
                 } else {
-                    Log.i(TAG, "No valid communication headset device available")
+                    Log.i(TAG, "No valid communication headset device available yet")
                 }
             }
-            // Classic SCO as a second path for buds that expose HFP during ringing.
             if (!audioManager.isBluetoothScoOn) {
                 audioManager.startBluetoothSco()
                 @Suppress("DEPRECATION")
@@ -208,8 +209,93 @@ class AudioRoutingManager(context: Context) {
                 scoStarted = true
                 Log.i(TAG, "Started Bluetooth SCO for headset announcement")
             }
+            boostVoiceCallVolume()
         } catch (e: Exception) {
             Log.w(TAG, "unlockHeadsetMediaPath failed", e)
+        }
+    }
+
+    /**
+     * Device to pin voice-communication playback to after SCO/BLE is up.
+     * Never returns classic A2DP — that path is silent during ringtone.
+     */
+    fun findCallHeadsetDevice(): AudioDeviceInfo? {
+        findCommunicationHeadset()?.let { return it }
+        val callTypes = setOf(
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_HEARING_AID,
+        )
+        return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            .filter { it.type in callTypes }
+            .filter { device ->
+                if (device.type != AudioDeviceInfo.TYPE_BLUETOOTH_SCO) return@filter true
+                try {
+                    audioManager.isBluetoothScoOn
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            .minByOrNull { communicationDevicePriority(it.type) }
+    }
+
+    /** Poll until SCO/BLE is usable, or [timeoutMs] elapses. */
+    fun awaitCallHeadsetDevice(timeoutMs: Long = 1800L): AudioDeviceInfo? {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            // Retry communication-device selection as SCO comes up.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !communicationDeviceSet) {
+                try {
+                    val device = findCommunicationHeadset()
+                    if (device != null) {
+                        val ok = audioManager.setCommunicationDevice(device)
+                        communicationDeviceSet = ok
+                        Log.i(
+                            TAG,
+                            "setCommunicationDevice (retry) ${device.productName} ok=$ok type=${device.type}",
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "setCommunicationDevice retry failed", e)
+                }
+            }
+            findCallHeadsetDevice()?.let { found ->
+                Log.i(TAG, "Call headset ready ${found.productName} type=${found.type}")
+                return found
+            }
+            try {
+                Thread.sleep(80)
+            } catch (_: InterruptedException) {
+                break
+            }
+        }
+        val fallback = findCallHeadsetDevice()
+        Log.i(
+            TAG,
+            "Call headset wait done scoOn=${try {
+                audioManager.isBluetoothScoOn
+            } catch (_: Exception) {
+                false
+            }} device=${fallback?.productName} type=${fallback?.type}",
+        )
+        return fallback
+    }
+
+    private fun boostVoiceCallVolume() {
+        try {
+            val stream = AudioManager.STREAM_VOICE_CALL
+            val max = audioManager.getStreamMaxVolume(stream)
+            val target = (max * 0.9f).toInt().coerceAtLeast(1)
+            val current = audioManager.getStreamVolume(stream)
+            if (current < target) {
+                audioManager.setStreamVolume(stream, target, 0)
+                Log.i(TAG, "Boosted STREAM_VOICE_CALL from $current to $target")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not boost voice call volume", e)
         }
     }
 
@@ -314,9 +400,11 @@ class AudioRoutingManager(context: Context) {
                         audioManager.setStreamVolume(AudioManager.STREAM_RING, target, 0)
                         Log.i(TAG, "Re-applied ring duck target=$target (OEM restored volume)")
                     }
-                    if (unlockHeadsetMedia && audioManager.mode != AudioManager.MODE_NORMAL) {
-                        audioManager.mode = AudioManager.MODE_NORMAL
-                        Log.i(TAG, "Re-applied MODE_NORMAL (OEM restored ringtone mode)")
+                    if (unlockHeadsetMedia &&
+                        audioManager.mode != AudioManager.MODE_IN_COMMUNICATION
+                    ) {
+                        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                        Log.i(TAG, "Re-applied MODE_IN_COMMUNICATION (OEM restored mode)")
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Ring duck keep-alive failed", e)

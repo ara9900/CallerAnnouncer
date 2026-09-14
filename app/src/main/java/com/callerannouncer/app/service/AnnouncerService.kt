@@ -27,19 +27,21 @@ import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.domain.model.PlayMode
 import com.callerannouncer.app.domain.model.TtsEngineMode
 import com.callerannouncer.app.receiver.AnnouncementStopReceiver
+import com.callerannouncer.app.service.tts.PlaybackLeg
 import com.callerannouncer.app.service.tts.PlaybackPlan
+import com.callerannouncer.app.service.tts.PlaybackRoute
 import com.callerannouncer.app.service.tts.TtsModelManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import android.media.AudioDeviceInfo
 
 class AnnouncerService : Service() {
 
@@ -228,8 +230,7 @@ class AnnouncerService : Service() {
             refreshNotification(speaking = true)
             val headsetDevice = audioRoutingManager.findHeadsetOutputDevice()
             val allowAnnounce = forcePlay || audioRoutingManager.shouldAnnounce(playMode)
-            // Re-check gate with the same device finder used for routing.
-            val plan = PlaybackPlan.resolve(
+            var plan = PlaybackPlan.resolve(
                 playMode = playMode,
                 forIncomingCall = forIncomingCall,
                 headset = headsetDevice,
@@ -245,7 +246,6 @@ class AnnouncerService : Service() {
                 return@withLock false
             }
 
-            // Only force exclusive headset routing when the plan is headset-only.
             val exclusiveHeadset = playMode == PlayMode.ONLY_HEADPHONES_BLUETOOTH &&
                 headsetDevice != null
             if (exclusiveHeadset) {
@@ -260,8 +260,15 @@ class AnnouncerService : Service() {
                     duckRing = plan.duckRing,
                 )
                 if (useHeadset) {
-                    // BLE/SCO need a moment after mode change before media is audible.
-                    delay(400)
+                    // Wait for SCO/BLE — classic A2DP is silent while the phone is ringing.
+                    val callHeadset = withContext(Dispatchers.IO) {
+                        audioRoutingManager.awaitCallHeadsetDevice()
+                    }
+                    plan = retargetHeadsetLegs(plan, callHeadset)
+                    Log.i(
+                        TAG,
+                        "Headset call target type=${callHeadset?.type} name=${callHeadset?.productName}",
+                    )
                 }
             } else {
                 val focusOk = audioRoutingManager.requestFocusAndRoute()
@@ -300,6 +307,23 @@ class AnnouncerService : Service() {
                 refreshNotification(speaking = false)
             }
         }
+    }
+
+    /**
+     * After SCO/BLE comes up, retarget headset legs away from classic A2DP (type 8),
+     * which stays silent for the whole ringtone period on One UI.
+     */
+    private fun retargetHeadsetLegs(
+        plan: PlaybackPlan,
+        callHeadset: AudioDeviceInfo?,
+    ): PlaybackPlan {
+        val retargeted = plan.legs.map { leg ->
+            when (leg.route) {
+                PlaybackRoute.HEADSET_CALL -> leg.copy(outputDevice = callHeadset)
+                else -> leg
+            }
+        }
+        return plan.copy(legs = retargeted)
     }
 
     private fun stopAnnouncementInternal(reason: String) {
