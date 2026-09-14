@@ -34,6 +34,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -253,10 +254,15 @@ class AnnouncerService : Service() {
 
             if (forIncomingCall) {
                 isAnnouncingIncomingCall = true
+                val useHeadset = plan.legs.any { it.outputDevice != null }
                 audioRoutingManager.beginIncomingCallAnnouncement(
-                    useHeadset = plan.legs.any { it.outputDevice != null },
+                    useHeadset = useHeadset,
                     duckRing = plan.duckRing,
                 )
+                if (useHeadset) {
+                    // A2DP needs a moment after leaving MODE_RINGTONE before media is audible.
+                    delay(250)
+                }
             } else {
                 val focusOk = audioRoutingManager.requestFocusAndRoute()
                 if (!focusOk) {

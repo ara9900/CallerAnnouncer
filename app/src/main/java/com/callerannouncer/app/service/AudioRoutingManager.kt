@@ -35,6 +35,9 @@ class AudioRoutingManager(context: Context) {
     private var wakeLock: PowerManager.WakeLock? = null
     private var incomingCallSessionActive = false
     private var savedSpeakerphoneOn: Boolean? = null
+    private var savedAudioMode: Int? = null
+    private var communicationDeviceSet = false
+    private var unlockHeadsetMedia = false
     private var ringDuckKeepAlive: Runnable? = null
 
     fun shouldAnnounce(playMode: PlayMode): Boolean {
@@ -128,22 +131,20 @@ class AudioRoutingManager(context: Context) {
 
     /**
      * Duck the ringtone and take focus so the caller name can be heard over the ring.
-     * Ringer mode, audio mode and speakerphone are left untouched: overriding them on
-     * One UI routes our TTS into a muted path while the ringtone keeps the speaker.
+     * When playing on a headset, also force MODE_NORMAL: during MODE_RINGTONE Samsung
+     * suspends A2DP so MediaPlayer reports success with routedDevice=null and silence.
      */
     fun beginIncomingCallAnnouncement(useHeadset: Boolean, duckRing: Boolean = true) {
         if (incomingCallSessionActive) return
         incomingCallSessionActive = true
 
         acquireWakeLock()
-        // Never mute ring to absolute 0 — on One UI that flips the phone into vibrate.
-        // Headphones-only mode must leave STREAM_RING completely alone so the default
-        // ringtone keeps playing from the phone speaker.
         if (duckRing) {
             duckRingtone(appContext)
             startRingDuckKeepAlive(forceSilent = false)
         }
         if (useHeadset) {
+            unlockHeadsetMediaPath()
             boostMediaVolumeForAnnouncement()
         } else {
             boostAnnouncementStreamVolume()
@@ -162,9 +163,62 @@ class AudioRoutingManager(context: Context) {
 
         stopRingDuckKeepAlive()
         abandonAudioFocus()
+        restoreHeadsetMediaPath()
         restoreRingtone(appContext)
         releaseWakeLock()
         logAudioState("end")
+    }
+
+    /**
+     * Telecom holds MODE_RINGTONE while the phone rings, which parks A2DP media.
+     * Force MODE_NORMAL (and optionally the communication device) so USAGE_MEDIA
+     * can actually reach the buds.
+     */
+    private fun unlockHeadsetMediaPath() {
+        try {
+            if (savedAudioMode == null) {
+                savedAudioMode = audioManager.mode
+            }
+            unlockHeadsetMedia = true
+            if (audioManager.mode != AudioManager.MODE_NORMAL) {
+                audioManager.mode = AudioManager.MODE_NORMAL
+                Log.i(TAG, "Forced MODE_NORMAL (was $savedAudioMode) for headset media")
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val headset = findHeadsetOutputDevice()
+                if (headset != null) {
+                    val ok = audioManager.setCommunicationDevice(headset)
+                    communicationDeviceSet = ok
+                    Log.i(TAG, "setCommunicationDevice ${headset.productName} ok=$ok type=${headset.type}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "unlockHeadsetMediaPath failed", e)
+        }
+    }
+
+    private fun restoreHeadsetMediaPath() {
+        try {
+            if (communicationDeviceSet && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.clearCommunicationDevice()
+                Log.i(TAG, "Cleared communication device")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "clearCommunicationDevice failed", e)
+        } finally {
+            communicationDeviceSet = false
+        }
+        try {
+            savedAudioMode?.let { previous ->
+                audioManager.mode = previous
+                Log.i(TAG, "Restored audio mode=$previous")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "restore audio mode failed", e)
+        } finally {
+            savedAudioMode = null
+            unlockHeadsetMedia = false
+        }
     }
 
     fun requestFocusAndRoute(): Boolean {
@@ -207,6 +261,10 @@ class AudioRoutingManager(context: Context) {
                     if (audioManager.getStreamVolume(AudioManager.STREAM_RING) > target) {
                         audioManager.setStreamVolume(AudioManager.STREAM_RING, target, 0)
                         Log.i(TAG, "Re-applied ring duck target=$target (OEM restored volume)")
+                    }
+                    if (unlockHeadsetMedia && audioManager.mode != AudioManager.MODE_NORMAL) {
+                        audioManager.mode = AudioManager.MODE_NORMAL
+                        Log.i(TAG, "Re-applied MODE_NORMAL (OEM restored ringtone mode)")
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Ring duck keep-alive failed", e)
