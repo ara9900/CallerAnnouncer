@@ -13,7 +13,8 @@ data class PlaybackLeg(
  * Resolved playback policy for one announcement.
  *
  * ALWAYS (+ audible SILENT_IF_MUTED): speaker and headset together when a headset exists.
- * ONLY_HEADPHONES_BLUETOOTH: headset only; never touch the ringtone.
+ * ONLY_HEADPHONES_BLUETOOTH: headset only. For calls we duck the ringtone so A2DP
+ * stays free for the announcement (Samsung otherwise plays only the ring in the buds).
  */
 data class PlaybackPlan(
     val shouldAnnounce: Boolean,
@@ -40,8 +41,9 @@ data class PlaybackPlan(
                     if (headset == null) return skip()
                     PlaybackPlan(
                         shouldAnnounce = true,
-                        // Phone speaker must keep the default ringtone / SMS sound.
-                        duckRing = false,
+                        // Ringtone on A2DP silences media announcements on Samsung buds.
+                        // User prefers hearing the name over keeping the ringtone.
+                        duckRing = forIncomingCall,
                         legs = listOf(
                             PlaybackLeg(
                                 route = if (forIncomingCall) {

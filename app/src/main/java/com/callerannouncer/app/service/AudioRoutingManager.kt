@@ -449,8 +449,8 @@ class AudioRoutingManager(context: Context) {
         }
 
         /**
-         * Duck only when this call will actually be announced on the speaker path.
-         * Headphones-only announcements leave the default ringtone untouched.
+         * Duck when a call announcement will fight the ringtone for the Bluetooth link.
+         * Headphones-only without a headset must leave the ringtone completely alone.
          */
         @JvmStatic
         fun duckRingtoneIfAnnouncing(context: Context) {
@@ -458,10 +458,6 @@ class AudioRoutingManager(context: Context) {
             val policy = AnnouncePolicyCache.read(appContext)
             if (!policy.callEnabled) {
                 Log.i(TAG, "Not ducking ring — call announcer disabled")
-                return
-            }
-            if (policy.playMode == PlayMode.ONLY_HEADPHONES_BLUETOOTH) {
-                Log.i(TAG, "Not ducking ring — headphones-only keeps default ringtone")
                 return
             }
             if (!AudioRoutingManager(appContext).shouldAnnounce(policy.playMode)) {
