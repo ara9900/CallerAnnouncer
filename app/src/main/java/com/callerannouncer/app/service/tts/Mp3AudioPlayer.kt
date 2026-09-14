@@ -78,7 +78,14 @@ class Mp3AudioPlayer(context: Context) {
                         pinOutput(player, outputDevice)
                         player.start()
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                            Log.i(TAG, "playing on device type=${player.routedDevice?.type}")
+                            val routedType = player.routedDevice?.type
+                            Log.i(TAG, "playing on device type=$routedType")
+                            // Accessibility-style pins can "succeed" while leaving no real
+                            // output; clearing the preference lets media fall back to A2DP.
+                            if (outputDevice != null && routedType == null) {
+                                player.setPreferredDevice(null)
+                                Log.w(TAG, "Preferred device produced no route — cleared pin")
+                            }
                         }
                     }
                     player.setOnCompletionListener {
@@ -147,7 +154,7 @@ class Mp3AudioPlayer(context: Context) {
             .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
             .build()
         PlaybackRoute.HEADSET_CALL -> AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+            .setUsage(AudioAttributes.USAGE_MEDIA)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
     }

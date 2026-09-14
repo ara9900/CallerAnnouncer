@@ -134,13 +134,16 @@ class AudioRoutingManager(context: Context) {
         incomingCallSessionActive = true
 
         acquireWakeLock()
-        duckRingtone(appContext)
-        startRingDuckKeepAlive()
+        // With a headset, mute the ringtone completely so it cannot steal the A2DP link
+        // and suspend media playback mid-sentence. Without a headset, just duck it.
         if (useHeadset) {
+            muteRingtone(appContext)
             boostMediaVolumeForAnnouncement()
         } else {
+            duckRingtone(appContext)
             boostAnnouncementStreamVolume()
         }
+        startRingDuckKeepAlive(forceSilent = useHeadset)
         logAudioState("begin")
         // Exclusive focus in both cases: a duckable request lets the ringtone attenuate
         // the announcement into silence on One UI.
@@ -189,16 +192,16 @@ class AudioRoutingManager(context: Context) {
         }
     }
 
-    private fun startRingDuckKeepAlive() {
+    private fun startRingDuckKeepAlive(forceSilent: Boolean) {
         stopRingDuckKeepAlive()
         val runnable = object : Runnable {
             override fun run() {
                 if (!incomingCallSessionActive) return
                 try {
-                    val target = duckTarget(audioManager)
+                    val target = if (forceSilent) 0 else duckTarget(audioManager)
                     if (audioManager.getStreamVolume(AudioManager.STREAM_RING) > target) {
                         audioManager.setStreamVolume(AudioManager.STREAM_RING, target, 0)
-                        Log.i(TAG, "Re-applied ring duck (OEM restored volume)")
+                        Log.i(TAG, "Re-applied ring duck target=$target (OEM restored volume)")
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Ring duck keep-alive failed", e)
@@ -263,7 +266,8 @@ class AudioRoutingManager(context: Context) {
             val attrs = AudioAttributes.Builder()
                 .apply {
                     if (useHeadset) {
-                        setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                        // Media follows the connected headset; accessibility/alarm do not.
+                        setUsage(AudioAttributes.USAGE_MEDIA)
                     } else {
                         setUsage(AudioAttributes.USAGE_ALARM)
                         setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
@@ -404,20 +408,33 @@ class AudioRoutingManager(context: Context) {
          */
         @JvmStatic
         fun duckRingtone(context: Context) {
+            setRingVolume(context, absoluteTarget = null, label = "Ducked")
+        }
+
+        /** Fully mute the ringtone so headset media playback is not suspended mid-clip. */
+        @JvmStatic
+        fun muteRingtone(context: Context) {
+            setRingVolume(context, absoluteTarget = 0, label = "Muted")
+        }
+
+        private fun setRingVolume(context: Context, absoluteTarget: Int?, label: String) {
             val appContext = context.applicationContext
             try {
                 val audioManager =
                     appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                val target = duckTarget(audioManager)
+                val target = absoluteTarget ?: duckTarget(audioManager)
                 val current = audioManager.getStreamVolume(AudioManager.STREAM_RING)
                 if (!prefs.contains(KEY_PRE_DUCK_RING_VOLUME) && current > target) {
                     prefs.edit().putInt(KEY_PRE_DUCK_RING_VOLUME, current).apply()
                 }
                 audioManager.setStreamVolume(AudioManager.STREAM_RING, target, 0)
-                Log.i(TAG, "Ducked ring $current -> $target (saved=${prefs.getInt(KEY_PRE_DUCK_RING_VOLUME, -1)})")
+                Log.i(
+                    TAG,
+                    "$label ring $current -> $target (saved=${prefs.getInt(KEY_PRE_DUCK_RING_VOLUME, -1)})",
+                )
             } catch (e: Exception) {
-                Log.w(TAG, "duckRingtone failed", e)
+                Log.w(TAG, "setRingVolume failed", e)
             }
         }
 

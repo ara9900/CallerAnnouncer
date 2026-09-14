@@ -9,9 +9,9 @@ enum class PlaybackRoute {
     INCOMING_CALL,
 
     /**
-     * Incoming call while a headset is connected. The media usage gets suspended when
-     * the ringtone grabs the Bluetooth link, and the alarm usage is duplicated onto the
-     * loudspeaker; the accessibility usage stays on the headset and keeps playing.
+     * Incoming call while a headset is connected. Must use the media stream so Android
+     * routes to A2DP/wired headset only. Accessibility and alarm streams fall back to the
+     * loudspeaker on One UI (or go silent when pinned to Bluetooth).
      */
     HEADSET_CALL,
 }
