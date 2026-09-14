@@ -260,8 +260,8 @@ class AnnouncerService : Service() {
                     duckRing = plan.duckRing,
                 )
                 if (useHeadset) {
-                    // A2DP needs a moment after leaving MODE_RINGTONE before media is audible.
-                    delay(250)
+                    // BLE/SCO need a moment after mode change before media is audible.
+                    delay(400)
                 }
             } else {
                 val focusOk = audioRoutingManager.requestFocusAndRoute()

@@ -38,6 +38,7 @@ class AudioRoutingManager(context: Context) {
     private var savedAudioMode: Int? = null
     private var communicationDeviceSet = false
     private var unlockHeadsetMedia = false
+    private var scoStarted = false
     private var ringDuckKeepAlive: Runnable? = null
 
     fun shouldAnnounce(playMode: PlayMode): Boolean {
@@ -68,6 +69,8 @@ class AudioRoutingManager(context: Context) {
             AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
             AudioDeviceInfo.TYPE_USB_HEADSET,
             AudioDeviceInfo.TYPE_USB_DEVICE,
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_BLE_SPEAKER,
             AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
             AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
             AudioDeviceInfo.TYPE_HEARING_AID,
@@ -170,9 +173,8 @@ class AudioRoutingManager(context: Context) {
     }
 
     /**
-     * Telecom holds MODE_RINGTONE while the phone rings, which parks A2DP media.
-     * Force MODE_NORMAL (and optionally the communication device) so USAGE_MEDIA
-     * can actually reach the buds.
+     * Telecom holds MODE_RINGTONE while the phone rings, which parks classic A2DP media.
+     * Force MODE_NORMAL and select a real communication device (BLE/SCO — never A2DP).
      */
     private fun unlockHeadsetMediaPath() {
         try {
@@ -185,19 +187,69 @@ class AudioRoutingManager(context: Context) {
                 Log.i(TAG, "Forced MODE_NORMAL (was $savedAudioMode) for headset media")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val headset = findHeadsetOutputDevice()
-                if (headset != null) {
-                    val ok = audioManager.setCommunicationDevice(headset)
+                val communicationDevice = findCommunicationHeadset()
+                if (communicationDevice != null) {
+                    val ok = audioManager.setCommunicationDevice(communicationDevice)
                     communicationDeviceSet = ok
-                    Log.i(TAG, "setCommunicationDevice ${headset.productName} ok=$ok type=${headset.type}")
+                    Log.i(
+                        TAG,
+                        "setCommunicationDevice ${communicationDevice.productName} " +
+                            "ok=$ok type=${communicationDevice.type}",
+                    )
+                } else {
+                    Log.i(TAG, "No valid communication headset device available")
                 }
+            }
+            // Classic SCO as a second path for buds that expose HFP during ringing.
+            if (!audioManager.isBluetoothScoOn) {
+                audioManager.startBluetoothSco()
+                @Suppress("DEPRECATION")
+                audioManager.isBluetoothScoOn = true
+                scoStarted = true
+                Log.i(TAG, "Started Bluetooth SCO for headset announcement")
             }
         } catch (e: Exception) {
             Log.w(TAG, "unlockHeadsetMediaPath failed", e)
         }
     }
 
+    /** A2DP (type 8) is rejected by setCommunicationDevice — use BLE/SCO/wired only. */
+    private fun findCommunicationHeadset(): AudioDeviceInfo? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+        val preferred = setOf(
+            AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+            AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_USB_HEADSET,
+            AudioDeviceInfo.TYPE_HEARING_AID,
+        )
+        return audioManager.availableCommunicationDevices
+            .filter { it.type in preferred }
+            .minByOrNull { communicationDevicePriority(it.type) }
+    }
+
+    private fun communicationDevicePriority(type: Int): Int = when (type) {
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> 0
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> 1
+        AudioDeviceInfo.TYPE_USB_HEADSET -> 2
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> 3
+        AudioDeviceInfo.TYPE_HEARING_AID -> 4
+        else -> 99
+    }
+
     private fun restoreHeadsetMediaPath() {
+        try {
+            if (scoStarted) {
+                @Suppress("DEPRECATION")
+                audioManager.isBluetoothScoOn = false
+                audioManager.stopBluetoothSco()
+                Log.i(TAG, "Stopped Bluetooth SCO")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "stopBluetoothSco failed", e)
+        } finally {
+            scoStarted = false
+        }
         try {
             if (communicationDeviceSet && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 audioManager.clearCommunicationDevice()
@@ -329,8 +381,7 @@ class AudioRoutingManager(context: Context) {
             val attrs = AudioAttributes.Builder()
                 .apply {
                     if (useHeadset) {
-                        // Media follows the connected headset; accessibility/alarm do not.
-                        setUsage(AudioAttributes.USAGE_MEDIA)
+                        setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                     } else {
                         setUsage(AudioAttributes.USAGE_ALARM)
                         setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
@@ -348,7 +399,7 @@ class AudioRoutingManager(context: Context) {
             @Suppress("DEPRECATION")
             audioManager.requestAudioFocus(
                 null,
-                if (useHeadset) AudioManager.STREAM_MUSIC else AudioManager.STREAM_ALARM,
+                if (useHeadset) AudioManager.STREAM_VOICE_CALL else AudioManager.STREAM_ALARM,
                 AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
             ) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
         }
@@ -444,13 +495,17 @@ class AudioRoutingManager(context: Context) {
     }
 
     private fun headsetDevicePriority(type: Int): Int = when (type) {
-        AudioDeviceInfo.TYPE_WIRED_HEADSET -> 0
-        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> 1
-        AudioDeviceInfo.TYPE_USB_HEADSET -> 2
-        AudioDeviceInfo.TYPE_USB_DEVICE -> 3
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> 4
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> 5
-        AudioDeviceInfo.TYPE_HEARING_AID -> 6
+        // Buds3 Pro (and most modern buds) ring/play over LE Audio — prefer it over
+        // classic A2DP which is suspended while Telecom holds MODE_RINGTONE.
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> 0
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> 1
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> 2
+        AudioDeviceInfo.TYPE_USB_HEADSET -> 3
+        AudioDeviceInfo.TYPE_USB_DEVICE -> 4
+        AudioDeviceInfo.TYPE_BLE_SPEAKER -> 5
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> 6
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> 7
+        AudioDeviceInfo.TYPE_HEARING_AID -> 8
         else -> 99
     }
 

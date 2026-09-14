@@ -147,7 +147,9 @@ class Mp3AudioPlayer(context: Context) {
             .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
             .build()
         PlaybackRoute.HEADSET_CALL -> AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_MEDIA)
+            // Voice-communication usage follows BLE/SCO communication devices; MEDIA
+            // pinned to classic A2DP stays silent while Telecom holds MODE_RINGTONE.
+            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
     }
