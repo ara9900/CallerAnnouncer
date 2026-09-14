@@ -134,19 +134,17 @@ class AudioRoutingManager(context: Context) {
         incomingCallSessionActive = true
 
         acquireWakeLock()
-        // With a headset, mute the ringtone completely so it cannot steal the A2DP link
-        // and suspend media playback mid-sentence. Without a headset, just duck it.
+        // Never mute ring to absolute 0 — on One UI that flips the phone into vibrate,
+        // corrupts the saved "original" volume, and leaves later calls silent.
+        // A light duck is enough for the announcement to be heard.
+        duckRingtone(appContext)
         if (useHeadset) {
-            muteRingtone(appContext)
             boostMediaVolumeForAnnouncement()
         } else {
-            duckRingtone(appContext)
             boostAnnouncementStreamVolume()
         }
-        startRingDuckKeepAlive(forceSilent = useHeadset)
+        startRingDuckKeepAlive(forceSilent = false)
         logAudioState("begin")
-        // Exclusive focus in both cases: a duckable request lets the ringtone attenuate
-        // the announcement into silence on One UI.
         val granted = requestExclusiveAudioFocus(useHeadset)
         Log.i(TAG, "Announcement focus granted=$granted useHeadset=$useHeadset")
     }
@@ -397,49 +395,66 @@ class AudioRoutingManager(context: Context) {
         private const val PREFS_NAME = "audio_routing_state"
         private const val KEY_PRE_DUCK_RING_VOLUME = "pre_duck_ring_volume"
         private const val KEY_PRE_DUCK_RINGER_MODE = "pre_duck_ringer_mode"
+        private const val KEY_LAST_GOOD_RING_VOLUME = "last_good_ring_volume"
+        private const val KEY_LAST_GOOD_RINGER_MODE = "last_good_ringer_mode"
 
         private fun duckTarget(audioManager: AudioManager): Int {
             val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
-            return (max * 0.12f).toInt().coerceAtLeast(0)
+            // Keep at least 1 so One UI does not flip into vibrate/silent.
+            return (max * 0.12f).toInt().coerceAtLeast(1)
         }
 
-        /**
-         * Lower ring volume only. The pre-duck level is persisted because the phone-state
-         * receiver ducks before the service starts, and the restore may run in another process.
-         */
+        private fun healthyRingFloor(audioManager: AudioManager): Int {
+            val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
+            return (max * 0.55f).toInt().coerceAtLeast(5)
+        }
+
+        /** Lower ring volume only. Never raises it and never saves an already-ducked value. */
         @JvmStatic
         fun duckRingtone(context: Context) {
-            setRingVolume(context, absoluteTarget = null, label = "Ducked")
-        }
-
-        /** Fully mute the ringtone so headset media playback is not suspended mid-clip. */
-        @JvmStatic
-        fun muteRingtone(context: Context) {
-            setRingVolume(context, absoluteTarget = 0, label = "Muted")
-        }
-
-        private fun setRingVolume(context: Context, absoluteTarget: Int?, label: String) {
             val appContext = context.applicationContext
             try {
                 val audioManager =
                     appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                val target = absoluteTarget ?: duckTarget(audioManager)
+                val target = duckTarget(audioManager)
                 val current = audioManager.getStreamVolume(AudioManager.STREAM_RING)
-                if (!prefs.contains(KEY_PRE_DUCK_RING_VOLUME) && current > target) {
+                val floor = healthyRingFloor(audioManager)
+
+                rememberGoodRingLevel(prefs, audioManager, current)
+
+                if (!prefs.contains(KEY_PRE_DUCK_RING_VOLUME) && current >= floor) {
                     prefs.edit()
                         .putInt(KEY_PRE_DUCK_RING_VOLUME, current)
                         .putInt(KEY_PRE_DUCK_RINGER_MODE, audioManager.ringerMode)
                         .apply()
                 }
-                audioManager.setStreamVolume(AudioManager.STREAM_RING, target, 0)
+
+                if (current > target) {
+                    audioManager.setStreamVolume(AudioManager.STREAM_RING, target, 0)
+                }
                 Log.i(
                     TAG,
-                    "$label ring $current -> $target (saved=${prefs.getInt(KEY_PRE_DUCK_RING_VOLUME, -1)})",
+                    "Ducked ring $current -> ${audioManager.getStreamVolume(AudioManager.STREAM_RING)} " +
+                        "(saved=${prefs.getInt(KEY_PRE_DUCK_RING_VOLUME, -1)})",
                 )
             } catch (e: Exception) {
-                Log.w(TAG, "setRingVolume failed", e)
+                Log.w(TAG, "duckRingtone failed", e)
             }
+        }
+
+        private fun rememberGoodRingLevel(
+            prefs: android.content.SharedPreferences,
+            audioManager: AudioManager,
+            current: Int,
+        ) {
+            val floor = healthyRingFloor(audioManager)
+            if (current < floor) return
+            if (audioManager.ringerMode != AudioManager.RINGER_MODE_NORMAL) return
+            prefs.edit()
+                .putInt(KEY_LAST_GOOD_RING_VOLUME, current)
+                .putInt(KEY_LAST_GOOD_RINGER_MODE, audioManager.ringerMode)
+                .apply()
         }
 
         /**
@@ -452,19 +467,53 @@ class AudioRoutingManager(context: Context) {
             val policy = AnnouncePolicyCache.read(appContext)
             if (!policy.callEnabled) {
                 Log.i(TAG, "Not ducking ring — call announcer disabled")
+                healRingtoneIfStuck(appContext)
                 return
             }
             if (!AudioRoutingManager(appContext).shouldAnnounce(policy.playMode)) {
                 Log.i(TAG, "Not ducking ring — playMode=${policy.playMode} blocks announcement")
+                healRingtoneIfStuck(appContext)
                 return
             }
             duckRingtone(appContext)
         }
 
         /**
+         * If a previous mute left STREAM_RING at 0/1, put a usable volume back so the
+         * phone can actually ring (especially when headphones-only skips announcing).
+         */
+        @JvmStatic
+        fun healRingtoneIfStuck(context: Context) {
+            val appContext = context.applicationContext
+            try {
+                val audioManager =
+                    appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val current = audioManager.getStreamVolume(AudioManager.STREAM_RING)
+                val floor = healthyRingFloor(audioManager)
+                if (current >= floor &&
+                    audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL
+                ) {
+                    rememberGoodRingLevel(prefs, audioManager, current)
+                    return
+                }
+                val target = prefs.getInt(KEY_LAST_GOOD_RING_VOLUME, -1)
+                    .takeIf { it >= floor }
+                    ?: floor
+                val mode = prefs.getInt(
+                    KEY_LAST_GOOD_RINGER_MODE,
+                    AudioManager.RINGER_MODE_NORMAL,
+                )
+                applyRingRestore(audioManager, target, mode, attempt = -1)
+                Log.i(TAG, "Healed stuck ring volume $current -> $target")
+            } catch (e: Exception) {
+                Log.w(TAG, "healRingtoneIfStuck failed", e)
+            }
+        }
+
+        /**
          * Restore the ring volume (and ringer mode) captured before the first duck.
-         * Muting to 0 on One UI flips the phone into vibrate and a single setStreamVolume
-         * often does not stick — so we re-apply mode+volume for a couple of seconds.
+         * Falls back to the last known good level if the saved snapshot was corrupted.
          */
         @JvmStatic
         fun restoreRingtone(context: Context) {
@@ -473,9 +522,24 @@ class AudioRoutingManager(context: Context) {
                 val audioManager =
                     appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
                 val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                val saved = prefs.getInt(KEY_PRE_DUCK_RING_VOLUME, -1)
-                val savedMode = prefs.getInt(KEY_PRE_DUCK_RINGER_MODE, -1)
-                if (saved < 0) return
+                val floor = healthyRingFloor(audioManager)
+                val rawSaved = prefs.getInt(KEY_PRE_DUCK_RING_VOLUME, -1)
+                val lastGood = prefs.getInt(KEY_LAST_GOOD_RING_VOLUME, -1)
+                val savedMode = prefs.getInt(
+                    KEY_PRE_DUCK_RINGER_MODE,
+                    prefs.getInt(KEY_LAST_GOOD_RINGER_MODE, AudioManager.RINGER_MODE_NORMAL),
+                )
+
+                val saved = when {
+                    rawSaved >= floor -> rawSaved
+                    lastGood >= floor -> lastGood
+                    rawSaved > 0 -> floor
+                    else -> {
+                        // Nothing to restore from prefs — still heal if we left it silent.
+                        healRingtoneIfStuck(appContext)
+                        return
+                    }
+                }
 
                 prefs.edit()
                     .remove(KEY_PRE_DUCK_RING_VOLUME)
@@ -515,12 +579,15 @@ class AudioRoutingManager(context: Context) {
             attempt: Int,
         ) {
             try {
-                if (ringerMode >= 0 && audioManager.ringerMode != ringerMode) {
-                    audioManager.ringerMode = ringerMode
+                val mode = if (volume > 0 && ringerMode == AudioManager.RINGER_MODE_VIBRATE) {
+                    AudioManager.RINGER_MODE_NORMAL
+                } else if (ringerMode >= 0) {
+                    ringerMode
+                } else {
+                    AudioManager.RINGER_MODE_NORMAL
                 }
-                // Muting to 0 often leaves the stream at 0 even after ringerMode is normal.
-                if (volume > 0 && audioManager.ringerMode == AudioManager.RINGER_MODE_VIBRATE) {
-                    audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+                if (audioManager.ringerMode != mode) {
+                    audioManager.ringerMode = mode
                 }
                 audioManager.setStreamVolume(
                     AudioManager.STREAM_RING,
