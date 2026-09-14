@@ -37,10 +37,11 @@ class AnnouncementStopReceiver : BroadcastReceiver() {
                 val previous = intent.getIntExtra("android.media.EXTRA_PREV_VOLUME_STREAM_VALUE", -1)
                 if (previous < 0 || current < 0) return
                 if (current >= previous) return
+                // Ignore STREAM_RING: we duck/mute it ourselves during call announcements,
+                // and that broadcast was falsely aborting playback within milliseconds.
                 if (
                     stream != AudioManager.STREAM_MUSIC &&
                     stream != AudioManager.STREAM_ALARM &&
-                    stream != AudioManager.STREAM_RING &&
                     stream != AudioManager.STREAM_VOICE_CALL
                 ) {
                     return

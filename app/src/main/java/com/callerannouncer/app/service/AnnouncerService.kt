@@ -224,7 +224,6 @@ class AnnouncerService : Service() {
                 return@withLock false
             }
             isSpeaking = true
-            registerStopControls()
             refreshNotification(speaking = true)
             // With a headset the announcement rides the media stream pinned to that device;
             // the alarm stream ignores the preferred device and leaks onto the loudspeaker.
@@ -232,6 +231,8 @@ class AnnouncerService : Service() {
             val headsetDevice = audioRoutingManager.beginExclusiveHeadsetOutput()
             if (forIncomingCall) {
                 isAnnouncingIncomingCall = true
+                // Mute/duck the ringtone BEFORE registering the volume-stop receiver,
+                // otherwise our own STREAM_RING change aborts the announcement.
                 audioRoutingManager.beginIncomingCallAnnouncement(
                     useHeadset = headsetDevice != null,
                 )
@@ -241,6 +242,7 @@ class AnnouncerService : Service() {
                     Log.w(TAG, "Audio focus denied — continuing anyway")
                 }
             }
+            registerStopControls()
             try {
                 ttsManager.setSpeechParams(rate, pitch)
                 val route = when {
