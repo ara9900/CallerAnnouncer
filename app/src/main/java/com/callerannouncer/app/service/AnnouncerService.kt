@@ -27,6 +27,7 @@ import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.domain.model.PlayMode
 import com.callerannouncer.app.domain.model.TtsEngineMode
 import com.callerannouncer.app.receiver.AnnouncementStopReceiver
+import com.callerannouncer.app.service.tts.PlaybackPlan
 import com.callerannouncer.app.service.tts.PlaybackRoute
 import com.callerannouncer.app.service.tts.TtsModelManager
 import kotlinx.coroutines.CoroutineScope
@@ -225,30 +226,37 @@ class AnnouncerService : Service() {
             }
             isSpeaking = true
             refreshNotification(speaking = true)
-            // With a headset the announcement rides the media stream pinned to that device;
-            // the alarm stream ignores the preferred device and leaks onto the loudspeaker.
-            // Without a headset, the alarm stream is the only one audible over the ringtone.
-            val headsetDevice = audioRoutingManager.beginExclusiveHeadsetOutput()
-            if (
-                forIncomingCall &&
-                !forcePlay &&
-                playMode == PlayMode.ONLY_HEADPHONES_BLUETOOTH &&
-                headsetDevice == null
-            ) {
-                Log.i(TAG, "Headphones-only mode but no usable headset — skipping announce")
-                audioRoutingManager.endExclusiveHeadsetOutput()
-                // Receiver may already have ducked before this gate; undo it.
-                AudioRoutingManager.restoreRingtoneIfDucked(applicationContext)
+            val headsetDevice = audioRoutingManager.findHeadsetOutputDevice()
+            val allowAnnounce = forcePlay || audioRoutingManager.shouldAnnounce(playMode)
+            // Re-check gate with the same device finder used for routing.
+            val plan = PlaybackPlan.resolve(
+                playMode = playMode,
+                forIncomingCall = forIncomingCall,
+                headset = headsetDevice,
+                allowAnnounce = allowAnnounce,
+            )
+            if (!plan.shouldAnnounce || plan.legs.isEmpty()) {
+                Log.i(TAG, "Skipped by playMode=$playMode headset=${headsetDevice != null}")
+                if (forIncomingCall) {
+                    AudioRoutingManager.restoreRingtoneIfDucked(applicationContext)
+                }
                 isSpeaking = false
                 refreshNotification(speaking = false)
                 return@withLock false
             }
+
+            // Only force exclusive headset routing when the plan is headset-only.
+            val exclusiveHeadset = playMode == PlayMode.ONLY_HEADPHONES_BLUETOOTH &&
+                headsetDevice != null
+            if (exclusiveHeadset) {
+                audioRoutingManager.beginExclusiveHeadsetOutput()
+            }
+
             if (forIncomingCall) {
                 isAnnouncingIncomingCall = true
-                // Duck the ringtone BEFORE registering the volume-stop receiver,
-                // otherwise our own STREAM_RING change aborts the announcement.
                 audioRoutingManager.beginIncomingCallAnnouncement(
-                    useHeadset = headsetDevice != null,
+                    useHeadset = plan.legs.any { it.outputDevice != null },
+                    duckRing = plan.duckRing,
                 )
             } else {
                 val focusOk = audioRoutingManager.requestFocusAndRoute()
@@ -259,26 +267,23 @@ class AnnouncerService : Service() {
             registerStopControls()
             try {
                 ttsManager.setSpeechParams(rate, pitch)
-                val route = when {
-                    !forIncomingCall -> PlaybackRoute.MEDIA
-                    headsetDevice != null -> PlaybackRoute.HEADSET_CALL
-                    else -> PlaybackRoute.INCOMING_CALL
-                }
                 val spoken = ttsManager.speakAndAwait(
                     text = text,
                     repeatCount = repeatCount,
-                    route = route,
-                    outputDevice = headsetDevice,
+                    legs = plan.legs,
                 )
                 Log.i(
                     TAG,
                     "speak result=$spoken mode=$ttsEngineMode incoming=$forIncomingCall " +
-                        "route=$route headset=${headsetDevice != null} repeat=$repeatCount " +
-                        "took=${System.currentTimeMillis() - requestedAt}ms text=$text",
+                        "playMode=$playMode duck=${plan.duckRing} legs=${plan.legs.size} " +
+                        "repeat=$repeatCount took=${System.currentTimeMillis() - requestedAt}ms " +
+                        "text=$text",
                 )
                 spoken
             } finally {
-                audioRoutingManager.endExclusiveHeadsetOutput()
+                if (exclusiveHeadset) {
+                    audioRoutingManager.endExclusiveHeadsetOutput()
+                }
                 if (forIncomingCall) {
                     isAnnouncingIncomingCall = false
                     audioRoutingManager.endIncomingCallAnnouncement()

@@ -7,6 +7,9 @@ import com.callerannouncer.app.data.cache.TtsAudioCache
 import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.service.tts.edge.EdgeTtsClient
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 
 /** Online Persian TTS using Microsoft Edge neural voices (Dilara / Farid). */
@@ -14,7 +17,8 @@ class OnlineEdgeTtsEngine(context: Context) {
 
     private val appContext = context.applicationContext
     private val client = EdgeTtsClient()
-    private val player = Mp3AudioPlayer(context.applicationContext)
+    private val primaryPlayer = Mp3AudioPlayer(context.applicationContext)
+    private var secondaryPlayer: Mp3AudioPlayer? = null
     private var voice: OnlineEdgeVoice = OnlineEdgeVoice.DILARA
     private var speechRate: Float = 1.0f
     private var pitch: Float = 1.0f
@@ -33,29 +37,72 @@ class OnlineEdgeTtsEngine(context: Context) {
         repeatCount: Int,
         route: PlaybackRoute,
         outputDevice: AudioDeviceInfo? = null,
+    ): Boolean = speak(
+        text = text,
+        repeatCount = repeatCount,
+        legs = listOf(PlaybackLeg(route, outputDevice)),
+    )
+
+    suspend fun speak(
+        text: String,
+        repeatCount: Int,
+        legs: List<PlaybackLeg>,
     ): Boolean {
-        if (text.isBlank()) return false
+        if (text.isBlank() || legs.isEmpty()) return false
         val times = repeatCount.coerceIn(1, 5)
         return withContext(Dispatchers.IO) {
             try {
                 val startedAt = System.currentTimeMillis()
-                player.resetCancellation()
-                // Rendered once per announcement: repeats replay the same audio instead of
-                // waiting seconds for another network round trip.
+                primaryPlayer.resetCancellation()
+                secondaryPlayer?.stop()
+                secondaryPlayer = null
                 val mp3 = audioFor(text)
-                if (mp3.isEmpty() || player.isStopped()) return@withContext false
-                Log.i(TAG, "audio ready in ${System.currentTimeMillis() - startedAt}ms")
-                player.play(
-                    mp3Data = mp3,
-                    route = route,
-                    outputDevice = outputDevice,
-                    repeatCount = times,
+                if (mp3.isEmpty() || primaryPlayer.isStopped()) return@withContext false
+                Log.i(
+                    TAG,
+                    "audio ready in ${System.currentTimeMillis() - startedAt}ms legs=${legs.size}",
                 )
+                if (legs.size == 1) {
+                    val leg = legs.first()
+                    primaryPlayer.play(
+                        mp3Data = mp3,
+                        route = leg.route,
+                        outputDevice = leg.outputDevice,
+                        repeatCount = times,
+                    )
+                } else {
+                    playDual(mp3, legs, times)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Online speak failed", e)
                 false
             }
         }
+    }
+
+    private suspend fun playDual(
+        mp3: ByteArray,
+        legs: List<PlaybackLeg>,
+        times: Int,
+    ): Boolean = coroutineScope {
+        val secondary = Mp3AudioPlayer(appContext).also { secondaryPlayer = it }
+        secondary.resetCancellation()
+        val jobs = legs.take(2).mapIndexed { index, leg ->
+            async {
+                val player = if (index == 0) primaryPlayer else secondary
+                player.play(
+                    mp3Data = mp3,
+                    route = leg.route,
+                    outputDevice = leg.outputDevice,
+                    repeatCount = times,
+                )
+            }
+        }
+        val results = jobs.awaitAll()
+        secondary.stop()
+        if (secondaryPlayer === secondary) secondaryPlayer = null
+        // Success if either leg was audible — Samsung may drop one path under load.
+        results.any { it }
     }
 
     /** Renders [text] into the cache without playing it — used by contact pre-caching. */
@@ -98,7 +145,11 @@ class OnlineEdgeTtsEngine(context: Context) {
     private fun cacheKey(text: String): String =
         TtsAudioCache.keyOf(voice.voiceId, text, speechRate, pitch)
 
-    fun stop() = player.stop()
+    fun stop() {
+        primaryPlayer.stop()
+        secondaryPlayer?.stop()
+        secondaryPlayer = null
+    }
 
     companion object {
         private const val TAG = "OnlineEdgeTts"

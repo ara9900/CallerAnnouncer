@@ -11,8 +11,8 @@ android {
         applicationId = "com.callerannouncer.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 35
-        versionName = "1.4.9"
+        versionCode = 36
+        versionName = "1.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true

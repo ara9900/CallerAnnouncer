@@ -7,6 +7,7 @@ import com.callerannouncer.app.domain.model.OnlineEdgeVoice
 import com.callerannouncer.app.domain.model.TtsEngineMode
 import com.callerannouncer.app.service.tts.OfflinePersianTtsEngine
 import com.callerannouncer.app.service.tts.OnlineEdgeTtsEngine
+import com.callerannouncer.app.service.tts.PlaybackLeg
 import com.callerannouncer.app.service.tts.PlaybackRoute
 import com.callerannouncer.app.service.tts.TtsModelManager
 
@@ -46,35 +47,45 @@ class TtsManager(context: Context) {
         repeatCount: Int = 1,
         route: PlaybackRoute = PlaybackRoute.MEDIA,
         outputDevice: AudioDeviceInfo? = null,
-    ): Boolean = when (engineMode) {
-        TtsEngineMode.OFFLINE -> offlineEngine.speak(
-            text = text,
-            speed = speechRate,
-            repeatCount = repeatCount,
-            route = route,
-            outputDevice = outputDevice,
-        )
-        TtsEngineMode.ONLINE_EDGE -> {
-            val onlineOk = onlineEngine.speak(
+    ): Boolean = speakAndAwait(
+        text = text,
+        repeatCount = repeatCount,
+        legs = listOf(PlaybackLeg(route, outputDevice)),
+    )
+
+    suspend fun speakAndAwait(
+        text: String,
+        repeatCount: Int = 1,
+        legs: List<PlaybackLeg>,
+    ): Boolean {
+        if (legs.isEmpty()) return false
+        return when (engineMode) {
+            TtsEngineMode.OFFLINE -> offlineEngine.speak(
                 text = text,
+                speed = speechRate,
                 repeatCount = repeatCount,
-                route = route,
-                outputDevice = outputDevice,
+                legs = legs,
             )
-            if (onlineOk) {
-                true
-            } else {
-                Log.w(TAG, "Online TTS failed — falling back to offline")
-                if (!TtsModelManager.ensureModelReady(appContext)) {
-                    false
+            TtsEngineMode.ONLINE_EDGE -> {
+                val onlineOk = onlineEngine.speak(
+                    text = text,
+                    repeatCount = repeatCount,
+                    legs = legs,
+                )
+                if (onlineOk) {
+                    true
                 } else {
-                    offlineEngine.speak(
-                        text = text,
-                        speed = speechRate,
-                        repeatCount = repeatCount,
-                        route = route,
-                        outputDevice = outputDevice,
-                    )
+                    Log.w(TAG, "Online TTS failed — falling back to offline")
+                    if (!TtsModelManager.ensureModelReady(appContext)) {
+                        false
+                    } else {
+                        offlineEngine.speak(
+                            text = text,
+                            speed = speechRate,
+                            repeatCount = repeatCount,
+                            legs = legs,
+                        )
+                    }
                 }
             }
         }

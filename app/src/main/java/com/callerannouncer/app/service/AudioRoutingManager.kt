@@ -131,24 +131,29 @@ class AudioRoutingManager(context: Context) {
      * Ringer mode, audio mode and speakerphone are left untouched: overriding them on
      * One UI routes our TTS into a muted path while the ringtone keeps the speaker.
      */
-    fun beginIncomingCallAnnouncement(useHeadset: Boolean) {
+    fun beginIncomingCallAnnouncement(useHeadset: Boolean, duckRing: Boolean = true) {
         if (incomingCallSessionActive) return
         incomingCallSessionActive = true
 
         acquireWakeLock()
-        // Never mute ring to absolute 0 — on One UI that flips the phone into vibrate,
-        // corrupts the saved "original" volume, and leaves later calls silent.
-        // A light duck is enough for the announcement to be heard.
-        duckRingtone(appContext)
+        // Never mute ring to absolute 0 — on One UI that flips the phone into vibrate.
+        // Headphones-only mode must leave STREAM_RING completely alone so the default
+        // ringtone keeps playing from the phone speaker.
+        if (duckRing) {
+            duckRingtone(appContext)
+            startRingDuckKeepAlive(forceSilent = false)
+        }
         if (useHeadset) {
             boostMediaVolumeForAnnouncement()
         } else {
             boostAnnouncementStreamVolume()
         }
-        startRingDuckKeepAlive(forceSilent = false)
         logAudioState("begin")
         val granted = requestExclusiveAudioFocus(useHeadset)
-        Log.i(TAG, "Announcement focus granted=$granted useHeadset=$useHeadset")
+        Log.i(
+            TAG,
+            "Announcement focus granted=$granted useHeadset=$useHeadset duckRing=$duckRing",
+        )
     }
 
     fun endIncomingCallAnnouncement() {
@@ -444,8 +449,8 @@ class AudioRoutingManager(context: Context) {
         }
 
         /**
-         * Duck only when this call will actually be announced. In headphones-only mode
-         * without a headset the phone must ring at its normal volume — do not "heal".
+         * Duck only when this call will actually be announced on the speaker path.
+         * Headphones-only announcements leave the default ringtone untouched.
          */
         @JvmStatic
         fun duckRingtoneIfAnnouncing(context: Context) {
@@ -453,6 +458,10 @@ class AudioRoutingManager(context: Context) {
             val policy = AnnouncePolicyCache.read(appContext)
             if (!policy.callEnabled) {
                 Log.i(TAG, "Not ducking ring — call announcer disabled")
+                return
+            }
+            if (policy.playMode == PlayMode.ONLY_HEADPHONES_BLUETOOTH) {
+                Log.i(TAG, "Not ducking ring — headphones-only keeps default ringtone")
                 return
             }
             if (!AudioRoutingManager(appContext).shouldAnnounce(policy.playMode)) {

@@ -21,6 +21,7 @@ class OfflinePersianTtsEngine(private val context: Context) {
     private val initMutex = Mutex()
     private var tts: OfflineTts? = null
     private var audioPlayer: PcmAudioPlayer? = null
+    private var secondaryPlayer: PcmAudioPlayer? = null
 
     suspend fun ensureReady(): Boolean {
         if (tts != null) return true
@@ -67,34 +68,56 @@ class OfflinePersianTtsEngine(private val context: Context) {
         repeatCount: Int,
         route: PlaybackRoute = PlaybackRoute.MEDIA,
         outputDevice: AudioDeviceInfo? = null,
+    ): Boolean = speak(
+        text = text,
+        speed = speed,
+        repeatCount = repeatCount,
+        legs = listOf(PlaybackLeg(route, outputDevice)),
+    )
+
+    suspend fun speak(
+        text: String,
+        speed: Float,
+        repeatCount: Int,
+        legs: List<PlaybackLeg>,
     ): Boolean {
-        if (text.isBlank()) return false
+        if (text.isBlank() || legs.isEmpty()) return false
         if (!ensureReady()) return false
 
         val engine = tts ?: return false
         val player = audioPlayer ?: return false
         val normalizedSpeed = speed.coerceIn(0.6f, 1.6f)
         val times = repeatCount.coerceIn(1, 5)
+        val primaryLeg = legs.first()
+        val secondaryLeg = legs.getOrNull(1)
 
         return withContext(Dispatchers.IO) {
             try {
-                // stop() from a previous call leaves stopped=true until we reset it here.
                 player.resetCancellation()
+                val secondary = secondaryLeg?.let {
+                    (secondaryPlayer ?: PcmAudioPlayer(engine.sampleRate()).also {
+                        secondaryPlayer = it
+                    }).also { it.resetCancellation() }
+                }
                 repeat(times) { index ->
                     if (index > 0) {
                         Thread.sleep(250)
-                        if (player.isStopped()) {
+                        if (player.isStopped() || secondary?.isStopped() == true) {
                             Log.i(TAG, "speak cancelled before repeat $index")
                             return@withContext false
                         }
                     }
-                    player.beginSession(route, outputDevice)
+                    player.beginSession(primaryLeg.route, primaryLeg.outputDevice)
+                    secondary?.beginSession(secondaryLeg!!.route, secondaryLeg.outputDevice)
 
                     val callback: (FloatArray) -> Int = { chunk ->
                         when {
-                            player.isStopped() -> 0
-                            player.writeSamples(chunk) -> 1
-                            else -> 0
+                            player.isStopped() || secondary?.isStopped() == true -> 0
+                            else -> {
+                                val okPrimary = player.writeSamples(chunk)
+                                val okSecondary = secondary?.writeSamples(chunk) ?: true
+                                if (okPrimary && okSecondary) 1 else 0
+                            }
                         }
                     }
 
@@ -105,28 +128,32 @@ class OfflinePersianTtsEngine(private val context: Context) {
                         callback = callback,
                     )
 
-                    if (player.isStopped()) {
+                    if (player.isStopped() || secondary?.isStopped() == true) {
                         Log.i(TAG, "speak cancelled during synthesis")
                         player.endSession()
+                        secondary?.endSession()
                         return@withContext false
                     }
 
                     if (audio.samples.isEmpty()) {
                         Log.e(TAG, "Generated empty audio for text=$text")
                         player.endSession()
+                        secondary?.endSession()
                         return@withContext false
                     }
 
                     val durationSec = audio.samples.size.toFloat() / engine.sampleRate()
                     Log.i(
                         TAG,
-                        "Generated ${audio.samples.size} samples (~${"%.1f".format(durationSec)}s)",
+                        "Generated ${audio.samples.size} samples (~${"%.1f".format(durationSec)}s) legs=${legs.size}",
                     )
 
                     player.awaitPlayback(audio.samples.size)
+                    secondary?.awaitPlayback(audio.samples.size)
                     player.endSession()
+                    secondary?.endSession()
 
-                    if (player.isStopped()) {
+                    if (player.isStopped() || secondary?.isStopped() == true) {
                         Log.i(TAG, "speak cancelled during playback")
                         return@withContext false
                     }
@@ -141,6 +168,7 @@ class OfflinePersianTtsEngine(private val context: Context) {
 
     fun stop() {
         audioPlayer?.stop()
+        secondaryPlayer?.stop()
     }
 
     fun shutdown() {
@@ -149,6 +177,8 @@ class OfflinePersianTtsEngine(private val context: Context) {
         tts = null
         audioPlayer?.release()
         audioPlayer = null
+        secondaryPlayer?.release()
+        secondaryPlayer = null
     }
 
     companion object {
