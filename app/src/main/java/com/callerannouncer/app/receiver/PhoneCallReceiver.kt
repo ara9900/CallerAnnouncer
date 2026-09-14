@@ -27,9 +27,9 @@ class PhoneCallReceiver : BroadcastReceiver() {
             TelephonyManager.EXTRA_STATE_IDLE -> {
                 Log.i(TAG, "Call state=$state — stopping announcement")
                 AnnouncerService.stopCallAnnouncement(context.applicationContext)
-                // Safety net: the ring was ducked here, so it must be restored here too
-                // even when no announcement ran (disabled, play mode, skipped duplicate).
-                AudioRoutingManager.restoreRingtone(context.applicationContext)
+                // Only restore if we actually ducked this call — never "heal" a phone that
+                // the user intentionally left silent/vibrate/low.
+                AudioRoutingManager.restoreRingtoneIfDucked(context.applicationContext)
                 if (state == TelephonyManager.EXTRA_STATE_IDLE) {
                     resetDebounce()
                 }
@@ -62,7 +62,6 @@ class PhoneCallReceiver : BroadcastReceiver() {
 
     private fun announceRinging(context: Context, number: String) {
         if (!shouldAnnounce(number)) {
-            Log.i(TAG, "Skipping duplicate ring event for number=$number")
             return
         }
 
@@ -87,8 +86,12 @@ class PhoneCallReceiver : BroadcastReceiver() {
     private fun shouldAnnounce(number: String): Boolean {
         val now = System.currentTimeMillis()
         val last = lastAnnounceAt.get()
-        val sameNumber = number == lastNumber
-        if (sameNumber && now - last < DEBOUNCE_MS) return false
+        // One announce per ring cycle — blank-number fallback must not be followed by
+        // a second announce when the real caller id arrives a moment later.
+        if (now - last < DEBOUNCE_MS) {
+            Log.i(TAG, "Skipping duplicate ring event for number=$number")
+            return false
+        }
         lastNumber = number
         lastAnnounceAt.set(now)
         return true

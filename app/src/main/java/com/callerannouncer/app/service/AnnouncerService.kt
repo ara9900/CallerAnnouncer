@@ -229,9 +229,23 @@ class AnnouncerService : Service() {
             // the alarm stream ignores the preferred device and leaks onto the loudspeaker.
             // Without a headset, the alarm stream is the only one audible over the ringtone.
             val headsetDevice = audioRoutingManager.beginExclusiveHeadsetOutput()
+            if (
+                forIncomingCall &&
+                !forcePlay &&
+                playMode == PlayMode.ONLY_HEADPHONES_BLUETOOTH &&
+                headsetDevice == null
+            ) {
+                Log.i(TAG, "Headphones-only mode but no usable headset — skipping announce")
+                audioRoutingManager.endExclusiveHeadsetOutput()
+                // Receiver may already have ducked before this gate; undo it.
+                AudioRoutingManager.restoreRingtoneIfDucked(applicationContext)
+                isSpeaking = false
+                refreshNotification(speaking = false)
+                return@withLock false
+            }
             if (forIncomingCall) {
                 isAnnouncingIncomingCall = true
-                // Mute/duck the ringtone BEFORE registering the volume-stop receiver,
+                // Duck the ringtone BEFORE registering the volume-stop receiver,
                 // otherwise our own STREAM_RING change aborts the announcement.
                 audioRoutingManager.beginIncomingCallAnnouncement(
                     useHeadset = headsetDevice != null,
